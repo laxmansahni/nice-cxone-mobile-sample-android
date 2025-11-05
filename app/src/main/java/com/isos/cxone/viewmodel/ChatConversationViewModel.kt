@@ -26,7 +26,7 @@ class ChatConversationViewModel : ViewModel() {
         Log.d(TAG, "ChatThreadsHandler initialized.")
     }
 
-    private var handlerThread: ChatThreadHandler? = null
+    private var chatThreadHandler: ChatThreadHandler? = null
     private var cancellableThreads: Cancellable? = null
     private var cancellableThread: Cancellable? = null
     private var isCreatingThread = false
@@ -54,9 +54,12 @@ class ChatConversationViewModel : ViewModel() {
             if (threadsList.isNotEmpty()) {
                 val existingThread = threadsList.first()
                 if (!hasThreadAttached) {
-                    Log.i(TAG, "Existing or newly created thread found (id=${existingThread.id}) → attaching.")
-                    handlerThread = handler.thread(existingThread)
-                    handlerThread?.let { attachThreadFlow(it) }
+                    Log.i(
+                        TAG,
+                        "Existing or newly created thread found (id=${existingThread.id}) → attaching."
+                    )
+                    chatThreadHandler = handler.thread(existingThread)
+                    chatThreadHandler?.let { attachThreadFlow(it) }
                 } else {
                     Log.v(TAG, "Thread already attached → ignoring further updates.")
                 }
@@ -77,18 +80,16 @@ class ChatConversationViewModel : ViewModel() {
 
             viewModelScope.launch {
                 try {
-                    val createdHandler = handler.create()
-                    Log.v(TAG, "create() returned handler=${createdHandler.hashCode()}")
-                    // Wait up to 10s for SDK to return thread via threads() callback
-                    repeat(10) { attempt ->
-                        kotlinx.coroutines.delay(1000L)
-                        Log.v(TAG, "Polling attempt ${attempt + 1}: refreshing threads()")
-                        try {
-                            handler.refresh()
-                        } catch (e: Exception) {
-                            Log.w(TAG, "refresh() failed on attempt ${attempt + 1}", e)
-                        }
-                    }
+                    val newHandler = handler.create()
+                    chatThreadHandler = newHandler
+                    Log.v(TAG, "create() returned handler=${chatThreadHandler.hashCode()}")
+                    // Since locally created threads don't trigger the listener, we manually set
+                    // a value here.
+                    val thread = chatThreadHandler!!.get()
+                    Log.i(TAG, "New thread created with id=${thread.id}.")
+                    _thread.value = thread
+                    // For future updates, we attach to the thread flow.
+                    attachThreadFlow(handler = chatThreadHandler!!)
                 } catch (e: Exception) {
                     Log.e(TAG, "Error during create()", e)
                     isCreatingThread = false // Reset only on error
