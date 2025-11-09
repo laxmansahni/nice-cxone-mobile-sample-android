@@ -16,8 +16,6 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.isos.cxone.ui.theme.CxoneSampleTheme
 import com.nice.cxonechat.ChatInstanceProvider
-import com.isos.cxone.viewmodel.ChatConversationViewModel
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.nice.cxonechat.Chat
 import com.nice.cxonechat.ChatState
 import com.nice.cxonechat.ChatState.Connected
@@ -29,12 +27,9 @@ import com.nice.cxonechat.ChatState.Prepared
 import com.nice.cxonechat.ChatState.Preparing
 import com.nice.cxonechat.ChatState.Ready
 import com.nice.cxonechat.exceptions.RuntimeChatException
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.graphics.Color
+import androidx.navigation.compose.rememberNavController
+import com.isos.cxone.navigation.Navigation
 
 class MainActivity : ComponentActivity(), ChatInstanceProvider.Listener {
 
@@ -191,8 +186,40 @@ class MainActivity : ComponentActivity(), ChatInstanceProvider.Listener {
  */
 @Composable
 fun MainScreen(currentChatState: ChatState) {
+    val navController = rememberNavController()
     val context = LocalContext.current
-    var isChatActive by remember { mutableStateOf(false) }
+    // Callback for the "Check & Manage Connection" button in LauncherScreen
+    val onConnectionActionClick: () -> Unit = {
+        try {
+            val provider = ChatInstanceProvider.get()
+            val currentState = provider.chatState
+
+            val message = when (currentState) {
+                Initial -> {
+                    provider.prepare(context)
+                    "Initial. Attempting Prepare()..."
+                }
+                Prepared -> "Prepared. Waiting for automatic Connect()..."
+                Ready -> {
+                    // If already ready, start the chat session immediately
+                    "Ready. Use the buttons below to start a chat."
+                    }
+                Connecting, Connected, Preparing -> "Connection/Preparation in progress ($currentState). Button action skipped."
+                else -> "Current State: $currentState. Waiting for state change..."
+            }
+            Log.i("MainScreen", message)
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+
+        } catch (e: IllegalStateException) {
+            val message = "Error: SDK not initialized. Check logs."
+            Log.e("MainScreen", message, e)
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            val message = "Connect error: ${e.message}"
+            Log.e("MainScreen", message, e)
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        }
+    }
 
     Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
         Column(
@@ -208,123 +235,10 @@ fun MainScreen(currentChatState: ChatState) {
                 style = MaterialTheme.typography.headlineMedium,
                 modifier = Modifier.padding(bottom = 32.dp)
             )
-
-            if (isChatActive) {
-                // --- Conditional ViewModel Initialization ---
-                val chatViewModel: ChatConversationViewModel = viewModel()
-                ChatSessionScreen(chatViewModel)
-                // ------------------------------------------
-            } else {
-                // Pass the live state to the status screen
-                ConnectionStatusScreen(currentChatState) {
-                    // Manual connection/prepare check logic
-                    try {
-                        val provider = ChatInstanceProvider.get()
-                        val currentState = provider.chatState
-
-                        val message = when (currentState) {
-                            Initial -> {
-                                // Manual start: Kick off the automatic preparation flow
-                                provider.prepare(context)
-                                "Initial. Attempting Prepare()..."
-                            }
-                            Prepared -> {
-                                // State is Prepared, but we rely on the automatic flow in the listener to call connect()
-                                "Prepared. Waiting for automatic Connect()..."
-                            }
-                            Ready -> {
-                                // If already ready, start the chat session immediately
-                                isChatActive = true
-                                "Chat is READY! Starting session..."
-                            }
-                            Connecting, Connected, Preparing -> "Connection/Preparation in progress ($currentState). Button action skipped."
-                            else -> "Current State: $currentState. Waiting for state change..."
-                        }
-                        Log.i("MainScreen", message)
-                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-
-                    } catch (e: IllegalStateException) {
-                        val message = "Error: SDK not initialized. Check logs."
-                        Log.e("MainScreen", message, e)
-                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-                    } catch (e: Exception) {
-                        val message = "Connect error: ${e.message}"
-                        Log.e("MainScreen", message, e)
-                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-                    }
-                }
-
-                // New button for starting the chat session, only visible when Ready
-                if (currentChatState == Ready) { // Use the live state here
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Button(onClick = {
-                        // This sets the state to trigger the ViewModel instantiation
-                        isChatActive = true
-                        Toast.makeText(context, "Starting Chat Session...", Toast.LENGTH_SHORT).show()
-                    }) {
-                        Text("Start Chat Session")
-                    }
-                }
-            }
+            Navigation(navController = navController,
+                currentChatState = currentChatState,
+                onConnectionActionClick = onConnectionActionClick)
         }
-    }
-}
-
-/**
- * Displays the current connection status and the main connection button.
- */
-@Composable
-fun ConnectionStatusScreen(chatState: ChatState, onActionClick: () -> Unit) {
-    val statusText = "Current State: $chatState"
-
-    val statusColor = when (chatState) {
-        Ready, Connected -> MaterialTheme.colorScheme.primary
-        Connecting, Preparing -> Color.Blue
-        ConnectionLost, Offline -> MaterialTheme.colorScheme.error
-        else -> Color.Gray
-    }
-
-    Text(
-        text = statusText,
-        style = MaterialTheme.typography.titleLarge,
-        color = statusColor,
-        modifier = Modifier.padding(bottom = 32.dp)
-    )
-
-    // Button to manually check state and try to connect/prepare
-    Button(onClick = onActionClick) {
-        Text("Check & Manage Connection")
-    }
-}
-
-/**
- * Placeholder for the actual Chat UI when the session is active.
- * This is where the ViewModel is used.
- */
-@Composable
-fun ChatSessionScreen(viewModel: ChatConversationViewModel) {
-    // Collect the thread StateFlow to automatically update the UI when the thread changes
-    val chatThread by viewModel.thread.collectAsState()
-
-    // Determine the status text based on the presence of the thread
-    val threadStatus = if (chatThread != null) {
-        "Thread ID: ${chatThread?.id}"
-    } else {
-        "Waiting for Chat Thread..."
-    }
-
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            text = "Chat Session Active!",
-            style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
-        Text(
-            text = threadStatus,
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (chatThread != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-            modifier = Modifier.padding(bottom = 32.dp)
-        )
     }
 }
 
