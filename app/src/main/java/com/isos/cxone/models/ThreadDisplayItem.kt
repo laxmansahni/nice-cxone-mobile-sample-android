@@ -1,14 +1,12 @@
 package com.isos.cxone.models
 
-import androidx.compose.runtime.Immutable
-import com.nice.cxonechat.message.Message
 import com.nice.cxonechat.message.Message.ListPicker
 import com.nice.cxonechat.message.Message.QuickReplies
 import com.nice.cxonechat.message.Message.RichLink
 import com.nice.cxonechat.message.Message.Text
+import com.nice.cxonechat.message.Message.Unsupported
 import com.nice.cxonechat.thread.ChatThread
 import java.util.Date
-import java.util.UUID
 
 /** Helper to convert a Date to a simple relative time string (placeholder for real logic). */
 private fun Date.toRelativeTime(): String {
@@ -49,6 +47,7 @@ data class ThreadDisplayItem( val chatThread: ChatThread,
                     is RichLink -> fallbackText
                     is QuickReplies -> fallbackText
                     is ListPicker -> fallbackText
+                    is Unsupported -> text
                 }
             }
             ?.takeIf { it.isNotBlank() } ?: "No message content."

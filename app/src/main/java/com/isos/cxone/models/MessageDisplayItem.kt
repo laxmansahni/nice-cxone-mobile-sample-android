@@ -10,5 +10,6 @@ data class MessageDisplayItem(
     val isUser: Boolean,
     val createdAt: Date,
     val status: String, // e.g., "Sending", "Sent", "Read"
-    val attachments: List<AttachmentDisplayItem> = emptyList()
+    val attachments: List<AttachmentDisplayItem> = emptyList(),
+    val author: Person? = null
 )

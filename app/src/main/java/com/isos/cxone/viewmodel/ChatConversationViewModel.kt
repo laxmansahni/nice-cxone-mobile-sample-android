@@ -38,6 +38,12 @@ import com.nice.cxonechat.message.MessageMetadata
 import com.nice.cxonechat.message.MessageAuthor
 import com.nice.cxonechat.message.MessageStatus
 import com.isos.cxone.models.MessageDisplayItem
+import com.isos.cxone.models.asPerson
+import com.nice.cxonechat.message.OutboundMessage
+import com.nice.cxonechat.ChatThreadMessageHandler.OnMessageTransferListener
+import kotlinx.coroutines.flow.update
+import java.lang.ref.WeakReference
+
 data class AttachmentDisplayItem(val name: String, val url: String)
 
 
@@ -122,6 +128,7 @@ class ChatConversationViewModel : ViewModel() {
                     is Message.QuickReplies -> sdkMsg.title // Use title for structured messages
                     is Message.ListPicker -> sdkMsg.title
                     is Message.RichLink -> sdkMsg.title
+                    is Message.Unsupported -> "Unsupported message content"
                 }
 
                 MessageDisplayItem(
@@ -129,11 +136,13 @@ class ChatConversationViewModel : ViewModel() {
                     text = messageText,
                     isUser = sdkMsg.direction == ToAgent,
                     createdAt = sdkMsg.createdAt,
-                    status = if (sdkMsg.direction == ToAgent) sdkMsg.metadata.status.toString() else "Received",
+                    status = sdkMsg.metadata.status.toString(),
                     // Map SDK Attachments to local SimpleAttachment data class
                     attachments = sdkMsg.attachments.map { sdkAttachment ->
                         AttachmentDisplayItem(sdkAttachment.friendlyName, sdkAttachment.url)
-                    }
+                    },
+                    author = sdkMsg.author?.asPerson
+
                 )
             } ?: emptyList()
         }
@@ -147,7 +156,7 @@ class ChatConversationViewModel : ViewModel() {
             val allMessages = sdkList.toMutableList()
 
             sentMap.values.forEach { tempMsg ->
-                // Create a SimpleMessage representation for the UI
+                // Create a MessageDisplayItem representation for the UI
                 val tempUiMsg = MessageDisplayItem(
                     id = tempMsg.localId,
                     text = tempMsg.text,
@@ -163,6 +172,7 @@ class ChatConversationViewModel : ViewModel() {
             allMessages.sortedByDescending { it.createdAt }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
 
     /** Agent Typing Status */
     val isAgentTyping: StateFlow<Boolean> = _thread
@@ -331,23 +341,70 @@ class ChatConversationViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Sends a text message by constructing an OutboundMessage and using the OnMessageSentListener
+     * pattern for immediate UI feedback.
+     */
     fun sendMessage(text: String) {
         if (text.isBlank()) return
 
-        val localId = UUID.randomUUID()
-        val tempMsg = TemporarySentMessage(localId, text)
+        // 1. Construct the SDK's OutboundMessage
+        val outboundMessage = OutboundMessage(message = text)
 
-        // 1. Add temporary message to local flow for instant UI update
-        sentMessagesFlow.value = sentMessagesFlow.value.plus(localId to tempMsg)
+        val appMessage: (UUID) -> TemporarySentMessage = { id ->
+            // Create a TemporarySentMessage with the UUID returned by the listener (localId here)
+            TemporarySentMessage(id, text)
+        }
 
-        // 2. Send the message via SDK
+        // 2. Create the listener to handle UI state updates
+        val listener = OnMessageSentListener(
+            message = appMessage,
+            flow = sentMessagesFlow,
+            loaderFlow = _isLoading
+        )
+
+        // 3. Send the message via SDK using the listener
         viewModelScope.launch {
             try {
-                // The SDK's send method is asynchronous and non-blocking.
-                threadHandler?.messages()?.send(text)
-                Log.d(TAG, "Sent message via SDK: $text")
+                threadHandler?.messages()?.send(outboundMessage, listener)
+                Log.d(TAG, "Sent message via SDK using listener: $text")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to send message", e)
+                // In case of immediate failure, manually stop the loader
+                _isLoading.update { false }
+            }
+        }
+    }
+    /**
+     * Implements OnMessageTransferListener to manage the state of the temporary message
+     * in the UI based on SDK feedback.
+     */
+    inner class OnMessageSentListener(
+        private val message: (UUID) -> TemporarySentMessage,
+        flow: MutableStateFlow<Map<UUID, TemporarySentMessage>>,
+        loaderFlow: MutableStateFlow<Boolean>,
+    ) : OnMessageTransferListener {
+
+        private val weakRef = WeakReference(flow)
+        private val weakRefLoader = WeakReference(loaderFlow)
+
+        override fun onProcessed(id: UUID) {
+            val map = weakRef.get() ?: return
+            val appMessage = message(id)
+            // Add the temporary message to the map for UI display.
+            // Note: We use the localId from the TemporarySentMessage as the key.
+            map.update { it.plus(appMessage.localId to appMessage) }
+
+            // Stop the loader
+            weakRefLoader.get()?.let {
+                it.update { false }
+            }
+        }
+
+        override fun onProcessing(message: OutboundMessage) {
+            // Notifies that message processing has started
+            weakRefLoader.get()?.let {
+                it.update { true }
             }
         }
     }

@@ -23,6 +23,7 @@ import com.nice.cxonechat.ChatState.Connecting
 import com.nice.cxonechat.ChatState.ConnectionLost
 import com.nice.cxonechat.ChatState.Initial
 import com.nice.cxonechat.ChatState.Offline
+import com.nice.cxonechat.ChatState.SdkNotSupported
 import com.nice.cxonechat.ChatState.Prepared
 import com.nice.cxonechat.ChatState.Preparing
 import com.nice.cxonechat.ChatState.Ready
@@ -152,6 +153,9 @@ class MainActivity : ComponentActivity(), ChatInstanceProvider.Listener {
 
                     Offline -> {
                         Toast.makeText(this, "Chat Channel is Offline.", Toast.LENGTH_LONG).show()
+                    }
+                    SdkNotSupported -> {
+                        Toast.makeText(this, "SDK version is not supported by the backend.", Toast.LENGTH_LONG).show()
                     }
 
                 }

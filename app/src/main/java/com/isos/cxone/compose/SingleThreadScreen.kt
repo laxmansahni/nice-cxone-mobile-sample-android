@@ -36,12 +36,25 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.isos.cxone.viewmodel.ChatConversationViewModel
 import com.isos.cxone.models.MessageDisplayItem
+import com.isos.cxone.models.Person
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
+import java.text.SimpleDateFormat
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -172,42 +185,88 @@ private fun ColumnScope.ChatHistory(
 @Composable
 private fun MessageItem(message: MessageDisplayItem) {
     val isUser = message.isUser
-    val alignment = if (isUser) Alignment.End else Alignment.Start
     val color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
     val textColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+    val author = message.author
 
+    // This ensures that if the configuration/locale changes, the formatter is correctly recreated.
+    val timeFormatter = remember { SimpleDateFormat("h:mm a", Locale.getDefault()) }
+    // Format the creation date
+    val timeText = remember(message.createdAt) { timeFormatter.format(message.createdAt) }
+
+    // The main container for the message block, aligned left or right
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp),
-        horizontalAlignment = alignment
+        horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
     ) {
-        Card(
-            shape = RoundedCornerShape(8.dp),
-            colors = CardDefaults.cardColors(containerColor = color),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+
+        // 1. Agent Name (Displayed only for agent messages)
+        if (!isUser && author != null) {
+            Text(
+                text = "${author.firstName} ${author.lastName}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 2.dp, start = 8.dp)
+            )
+        }
+
+        // 2. Avatar + Card Row (limits the width of the message bubble)
+        Row(
+            horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+            verticalAlignment = Alignment.Top,
+            modifier = Modifier.fillMaxWidth(0.85f)
         ) {
-            Column(modifier = Modifier.padding(10.dp)) {
-                Text(
-                    text = message.text,
-                    color = textColor,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Row(
-                    modifier = Modifier.align(Alignment.End),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+
+            // Agent Avatar (Left side of the bubble)
+            if (!isUser && author != null) {
+                AuthorAvatar(person = message.author, avatarSize = 32.dp)
+                Spacer(Modifier.width(8.dp))
+            }
+
+            // Message Card
+            Card(
+                shape = RoundedCornerShape(
+                    topStart = 8.dp,
+                    topEnd = 8.dp,
+                    bottomStart = if (isUser) 8.dp else 2.dp,
+                    bottomEnd = if (isUser) 2.dp else 8.dp
+                ),
+                colors = CardDefaults.cardColors(containerColor = color),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
                     Text(
-                        text = message.status,
-                        color = textColor.copy(alpha = 0.6f),
-                        style = MaterialTheme.typography.labelSmall
+                        text = message.text,
+                        color = textColor,
+                        style = MaterialTheme.typography.bodyMedium
                     )
+                        Row(
+                            modifier = Modifier.align(Alignment.End),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Display the time
+                            Text(
+                                text = timeText,
+                                color = textColor.copy(alpha = 0.6f),
+                                style = MaterialTheme.typography.labelSmall
+                            )
+
+                            Spacer(Modifier.width(4.dp)) // Small spacer between time and status
+                            Text(
+                                text = message.status,
+                                color = textColor.copy(alpha = 0.6f),
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
                 }
             }
+
+            // User status/avatar could go here if needed
         }
     }
 }
-
 @Composable
 private fun AgentTypingIndicator(modifier: Modifier = Modifier) {
     Row(
@@ -304,6 +363,48 @@ private fun MessageInput(
             modifier = Modifier.height(56.dp)
         ) {
             Icon(Icons.Default.Send, contentDescription = "Send")
+        }
+    }
+}
+
+@Composable
+fun AuthorAvatar(
+    modifier: Modifier = Modifier,
+    person: Person,
+    avatarSize: Dp = 48.dp
+) {
+    // Determine the model for the AsyncImage request.
+    // We explicitly use the ImageRequest to set a custom placeholder/error behavior if needed,
+    // though the placeholder in AsyncImage itself handles the image state.
+    val model = ImageRequest.Builder(LocalContext.current)
+        .data(person.imageUrl)
+        .crossfade(true)
+        .build()
+
+    // Container box for the circular avatar
+    Box(
+        modifier = modifier
+            .size(avatarSize)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.secondaryContainer),
+        contentAlignment = Alignment.Center
+    ) {
+        if (!person.imageUrl.isNullOrEmpty()) {
+            // 1. Display the image using Coil if the URL is present and not blank.
+            AsyncImage(
+                model = model,
+                contentDescription = "Avatar for ${person.name}",
+                modifier = Modifier
+                    .matchParentSize() // The image takes the size of the Box
+            )
+        } else {
+            // 2. Display a default icon if the imageUrl is null or empty.
+            Icon(
+                imageVector = Icons.Default.Person,
+                contentDescription = "Placeholder avatar",
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(avatarSize * 0.6f)
+            )
         }
     }
 }
