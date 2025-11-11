@@ -56,6 +56,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.android.navigation)
     implementation(libs.android.compose.coil)
+    implementation(libs.androidx.emoji2)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

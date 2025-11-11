@@ -10,6 +10,7 @@ activityCompose = "1.11.0"
 composeBom = "2024.09.00"
 androidNavigation = "2.8.9"
 coilVersion = "3.3.0"
+emoji2Version = "1.6.0"
 
 # --- ADDED: NICE CXONE SDK Version ---
 nice-sdk-chat = "3.1.0"
@@ -34,6 +35,7 @@ androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-te
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
 android-compose-coil = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coilVersion"}
+androidx-emoji2 = { group = "androidx.emoji2", name = "emoji2", version.ref = "emoji2Version"}
 
 #android navigation
 android-navigation = { module = "androidx.navigation:navigation-compose", version.ref = "androidNavigation"}

@@ -5,6 +5,7 @@ import android.util.Log
 import com.nice.cxonechat.ChatInstanceProvider
 import com.nice.cxonechat.SocketFactoryConfiguration
 import com.nice.cxonechat.enums.CXoneEnvironment
+import com.nice.cxonechat.UserName
 
 class CxoneSampleApplication : Application() {
     companion object {
@@ -23,10 +24,14 @@ class CxoneSampleApplication : Application() {
             "chat_15bf234b-d6a8-4ce0-8b90-e8cf3c6f3748"
         )
 
+        val userName = UserName(
+            "Singh",
+            "Kuldeep"
+        )
         // 2. Create the singleton ChatInstanceProvider
         try {
             // Note: This method automatically creates the singleton instance and logs the state.
-            ChatInstanceProvider.create(config)
+            ChatInstanceProvider.create(config, userName = userName)
             Log.i(TAG, "ChatInstanceProvider created successfully.")
 
             // 3. Immediately prepare the connection

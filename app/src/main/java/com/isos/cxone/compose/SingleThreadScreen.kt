@@ -55,6 +55,60 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import java.text.SimpleDateFormat
 import java.util.Locale
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import androidx.emoji2.text.EmojiCompat
+
+private val JumboEmojiStyle = TextStyle(
+    fontSize = 34.sp,
+    lineHeight = 40.8.sp,
+    fontWeight = FontWeight.Normal, // W400
+    // Using default font family
+)
+
+private const val EMOJI_TEXT_MAX_LENGTH = 3
+
+/**
+ * Counts the number of emojis in a given message using EmojiCompat.
+ *
+ *
+ * @param message The message to count emojis in.
+ * @param limit The maximum number of emojis to count.
+ * @return The number of emojis in the message, or -1 if the limit is exceeded or if any character is not an emoji.
+ */
+private fun EmojiCompat.emojiCount(message: String, limit: Int = Int.MAX_VALUE): Int {
+    var emojiCount = 0
+    var offset = 0
+    while (offset < message.length && emojiCount <= limit) {
+        if (getEmojiStart(message, offset) == offset) {
+            emojiCount++
+            offset = getEmojiEnd(message, offset)
+        } else {
+            emojiCount = -1
+            break
+        }
+    }
+    return if (emojiCount > limit) -1 else emojiCount
+}
+
+/**
+ * Checks if a message qualifies for the jumbo emoji rendering, matching the criteria:
+ * 1. EmojiCompat must be initialized.
+ * 2. Must not be blank.
+ * 3. Must contain between 1 and EMOJI_TEXT_MAX_LENGTH (3) *emojis* and nothing else.
+ */
+private fun String.isEmojiMessage(): Boolean {
+    val emoji = runCatching { EmojiCompat.get() }.getOrNull()
+    val messageText = this
+
+    // Check #1, #2, and #3 (using the logic from ConversationUiState.kt)
+    return emoji != null &&
+            messageText.isNotBlank() &&
+            // Count must be 1, 2, or 3, AND the message must contain ONLY emojis
+            emoji.emojiCount(messageText, EMOJI_TEXT_MAX_LENGTH) in 1..EMOJI_TEXT_MAX_LENGTH
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -185,9 +239,26 @@ private fun ColumnScope.ChatHistory(
 @Composable
 private fun MessageItem(message: MessageDisplayItem) {
     val isUser = message.isUser
-    val color = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
-    val textColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
     val author = message.author
+
+    // 1. Determine if it's an emoji message using the new SDK-alike logic
+    val isEmoji = message.text.isEmojiMessage()
+
+    // 2. Determine Styling based on user/agent and emoji status
+    val messageBackgroundColor = when {
+        isEmoji -> Color.Transparent // Jumbo emojis have no bubble
+        isUser -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+
+    // Text color needs to be visible on both colored bubbles and transparent background
+    val textColor = if (isUser && !isEmoji) MaterialTheme.colorScheme.onPrimary
+    else MaterialTheme.colorScheme.onSurfaceVariant
+
+    val cardElevation = if (isEmoji) 0.dp else 1.dp
+    val textStyle = if (isEmoji) JumboEmojiStyle else MaterialTheme.typography.bodyMedium
+    val contentPadding = if (isEmoji) 0.dp else 10.dp
+
 
     // This ensures that if the configuration/locale changes, the formatter is correctly recreated.
     val timeFormatter = remember { SimpleDateFormat("h:mm a", Locale.getDefault()) }
@@ -216,7 +287,7 @@ private fun MessageItem(message: MessageDisplayItem) {
         Row(
             horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
             verticalAlignment = Alignment.Top,
-            modifier = Modifier.fillMaxWidth(0.85f)
+            modifier = Modifier.fillMaxWidth(if (isEmoji) 1.0f else 0.85f) // Allow emojis to take full width if needed
         ) {
 
             // Agent Avatar (Left side of the bubble)
@@ -227,20 +298,21 @@ private fun MessageItem(message: MessageDisplayItem) {
 
             // Message Card
             Card(
-                shape = RoundedCornerShape(
+                // Use RoundedCornerShape(0.dp) for emoji messages to ensure no visible background corner remains
+                shape = if (isEmoji) RoundedCornerShape(0.dp) else RoundedCornerShape(
                     topStart = 8.dp,
                     topEnd = 8.dp,
                     bottomStart = if (isUser) 8.dp else 2.dp,
                     bottomEnd = if (isUser) 2.dp else 8.dp
                 ),
-                colors = CardDefaults.cardColors(containerColor = color),
-                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                colors = CardDefaults.cardColors(containerColor = messageBackgroundColor),
+                elevation = CardDefaults.cardElevation(defaultElevation = cardElevation)
             ) {
-                Column(modifier = Modifier.padding(10.dp)) {
+                Column(modifier = Modifier.padding(contentPadding)) {
                     Text(
                         text = message.text,
                         color = textColor,
-                        style = MaterialTheme.typography.bodyMedium
+                        style = textStyle
                     )
                         Row(
                             modifier = Modifier.align(Alignment.End),
@@ -262,8 +334,6 @@ private fun MessageItem(message: MessageDisplayItem) {
                         }
                 }
             }
-
-            // User status/avatar could go here if needed
         }
     }
 }
