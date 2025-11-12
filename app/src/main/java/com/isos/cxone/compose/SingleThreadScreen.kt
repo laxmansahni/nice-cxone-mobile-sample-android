@@ -60,6 +60,12 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.emoji2.text.EmojiCompat
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.material.icons.filled.Link
+import android.content.Intent
+import android.util.Log
+import androidx.core.net.toUri
 
 private val JumboEmojiStyle = TextStyle(
     fontSize = 34.sp,
@@ -241,23 +247,31 @@ private fun MessageItem(message: MessageDisplayItem) {
     val isUser = message.isUser
     val author = message.author
 
-    // 1. Determine if it's an emoji message using the new SDK-alike logic
-    val isEmoji = message.text.isEmojiMessage()
+    // ASSUMPTION: Rich link check based on nullable properties in MessageDisplayItem
+    val isRichLink = !message.richLink?.url.isNullOrBlank()
 
-    // 2. Determine Styling based on user/agent and emoji status
+    // 1. Determine if it's an emoji message using the new SDK-alike logic
+    val isEmoji = message.text.isEmojiMessage() && !isRichLink // Rich link takes precedence
+
+    // 2. Determine Styling based on user/agent, emoji, and rich link status
     val messageBackgroundColor = when {
         isEmoji -> Color.Transparent // Jumbo emojis have no bubble
+        isRichLink -> MaterialTheme.colorScheme.surface // Use a clean, non-accented background for rich links
         isUser -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.surfaceVariant
     }
 
     // Text color needs to be visible on both colored bubbles and transparent background
-    val textColor = if (isUser && !isEmoji) MaterialTheme.colorScheme.onPrimary
-    else MaterialTheme.colorScheme.onSurfaceVariant
+    val textColor = when {
+        isRichLink -> MaterialTheme.colorScheme.onSurface
+        isUser && !isEmoji -> MaterialTheme.colorScheme.onPrimary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
 
     val cardElevation = if (isEmoji) 0.dp else 1.dp
     val textStyle = if (isEmoji) JumboEmojiStyle else MaterialTheme.typography.bodyMedium
-    val contentPadding = if (isEmoji) 0.dp else 10.dp
+    // Rich link has custom padding inside RichLinkContent, standard text/emoji uses 10.dp
+    val contentPadding = if (isRichLink || isEmoji) 0.dp else 10.dp
 
 
     // This ensures that if the configuration/locale changes, the formatter is correctly recreated.
@@ -287,7 +301,8 @@ private fun MessageItem(message: MessageDisplayItem) {
         Row(
             horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
             verticalAlignment = Alignment.Top,
-            modifier = Modifier.fillMaxWidth(if (isEmoji) 1.0f else 0.85f) // Allow emojis to take full width if needed
+            // Rich links are typically narrower than the full width
+            modifier = Modifier.fillMaxWidth(if (isRichLink || isEmoji) 1.0f else 0.85f)
         ) {
 
             // Agent Avatar (Left side of the bubble)
@@ -309,29 +324,41 @@ private fun MessageItem(message: MessageDisplayItem) {
                 elevation = CardDefaults.cardElevation(defaultElevation = cardElevation)
             ) {
                 Column(modifier = Modifier.padding(contentPadding)) {
-                    Text(
-                        text = message.text,
-                        color = textColor,
-                        style = textStyle
-                    )
-                        Row(
-                            modifier = Modifier.align(Alignment.End),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Display the time
-                            Text(
-                                text = timeText,
-                                color = textColor.copy(alpha = 0.6f),
-                                style = MaterialTheme.typography.labelSmall
-                            )
+                    if (isRichLink) {
+                        RichLinkContent(
+                            title = message.richLink.title, // Use message.text if title is missing
+                            url = message.richLink.url,
+                            imageUrl = message.richLink.imageUrl,
+                        )
+                    } else {
+                        // Renders the original text/emoji content
+                        Text(
+                            text = message.text,
+                            color = textColor,
+                            style = textStyle
+                        )
+                    }
 
-                            Spacer(Modifier.width(4.dp)) // Small spacer between time and status
-                            Text(
-                                text = message.status,
-                                color = textColor.copy(alpha = 0.6f),
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        }
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.End)
+                            .padding(top = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Display the time
+                        Text(
+                            text = timeText,
+                            color = textColor.copy(alpha = 0.6f),
+                            style = MaterialTheme.typography.labelSmall
+                        )
+
+                        Spacer(Modifier.width(4.dp)) // Small spacer between time and status
+                        Text(
+                            text = message.status,
+                            color = textColor.copy(alpha = 0.6f),
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
                 }
             }
         }
@@ -476,5 +503,77 @@ fun AuthorAvatar(
                 modifier = Modifier.size(avatarSize * 0.6f)
             )
         }
+    }
+}
+
+@Composable
+private fun RichLinkContent(
+    title: String,
+    url: String,
+    imageUrl: String?,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val linkColor = MaterialTheme.colorScheme.primary
+
+    Column(
+        modifier = modifier.clickable {
+            // Open the rich link URL in an external browser
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, url.toUri())
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                // Log error or show a toast if the URL can't be opened
+                Log.e("SingleThreadScreen", "$url can't be opened.", e)
+            }
+        }
+    ) {
+        // 1. Image Preview (optional)
+        if (!imageUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(imageUrl)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = null, // decorative
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(120.dp) // Fixed height for rich link preview image
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+
+        // 2. Title
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(horizontal = 10.dp)
+        )
+
+        Spacer(Modifier.height(4.dp))
+
+        // 3. URL and Icon
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 10.dp)
+        ) {
+            Text(
+                text = url,
+                style = MaterialTheme.typography.labelMedium,
+                color = linkColor,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                Icons.Default.Link,
+                contentDescription = "External link",
+                tint = linkColor,
+                modifier = Modifier.size(14.dp)
+            )
+        }
+        Spacer(Modifier.height(8.dp)) // Padding at the bottom of the card content
     }
 }

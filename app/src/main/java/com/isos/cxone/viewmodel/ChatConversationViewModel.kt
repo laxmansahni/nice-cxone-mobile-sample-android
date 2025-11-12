@@ -46,7 +46,14 @@ import java.lang.ref.WeakReference
 
 data class AttachmentDisplayItem(val name: String, val url: String)
 
-
+/**
+ * Data class to hold properties of a RichLink message for UI display.
+ */
+data class RichLinkDisplayItem(
+    val title: String,
+    val url: String,
+    val imageUrl: String? = null
+)
 
 /**
  * Temporary message object used before the SDK confirms receipt.
@@ -123,12 +130,23 @@ class ChatConversationViewModel : ViewModel() {
             // Convert SDK messages to SimpleMessage list. We must use a 'when' expression
             // to safely access content based on the message type (fixing the 'text' error).
             sdkMessages?.map { sdkMsg ->
-                val messageText = when (sdkMsg) {
-                    is Message.Text -> sdkMsg.text // Correct access for Text messages
-                    is Message.QuickReplies -> sdkMsg.title // Use title for structured messages
-                    is Message.ListPicker -> sdkMsg.title
-                    is Message.RichLink -> sdkMsg.title
-                    is Message.Unsupported -> "Unsupported message content"
+                val messageText: String
+                var richLinkItem: RichLinkDisplayItem? = null
+
+                when (sdkMsg) {
+                    is Message.Text -> messageText = sdkMsg.text // Correct access for Text messages
+                    is Message.QuickReplies -> messageText = sdkMsg.title // Use title for structured messages
+                    is Message.ListPicker -> messageText = sdkMsg.title
+                    is Message.RichLink -> {
+                        // Handle RichLink content and populate the dedicated model
+                        messageText = sdkMsg.title // Use the main title as the primary message text
+                        richLinkItem = RichLinkDisplayItem(
+                            title = sdkMsg.title,
+                            url = sdkMsg.url,
+                            imageUrl = sdkMsg.media.url
+                        )
+                    }
+                    is Message.Unsupported -> messageText = "Unsupported message content"
                 }
 
                 MessageDisplayItem(
@@ -141,6 +159,7 @@ class ChatConversationViewModel : ViewModel() {
                     attachments = sdkMsg.attachments.map { sdkAttachment ->
                         AttachmentDisplayItem(sdkAttachment.friendlyName, sdkAttachment.url)
                     },
+                    richLink = richLinkItem, // Assign the rich link data
                     author = sdkMsg.author?.asPerson
 
                 )
