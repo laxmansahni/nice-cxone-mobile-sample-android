@@ -1,17 +1,20 @@
 package com.isos.cxone.compose
 
+import android.content.Context
 import androidx.compose.runtime.*
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -36,7 +39,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.runtime.Composable
@@ -66,6 +68,35 @@ import androidx.compose.material.icons.filled.Link
 import android.content.Intent
 import android.util.Log
 import androidx.core.net.toUri
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.foundation.border
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.material3.Divider
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.nice.cxonechat.message.Attachment
+import com.isos.cxone.viewmodel.AttachmentType
+import androidx.compose.ui.graphics.vector.ImageVector
+import com.isos.cxone.attachment.AttachmentResolver
+import com.isos.cxone.attachment.AttachmentResolverImpl
+import com.isos.cxone.util.ChatConversationViewModelFactory
+import androidx.compose.material.icons.filled.Download
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Downloading
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 
 private val JumboEmojiStyle = TextStyle(
     fontSize = 34.sp,
@@ -116,30 +147,45 @@ private fun String.isEmojiMessage(): Boolean {
             emoji.emojiCount(messageText, EMOJI_TEXT_MAX_LENGTH) in 1..EMOJI_TEXT_MAX_LENGTH
 }
 
+private var attachmentResolver: AttachmentResolver = AttachmentResolverImpl()
+
+private val defaultViewModelFactory = ChatConversationViewModelFactory(attachmentResolver)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SingleThreadScreen(
-    viewModel: ChatConversationViewModel = viewModel(),
+    viewModelFactory: ChatConversationViewModelFactory = defaultViewModelFactory,
     threadId: String,
     navigateUp: () -> Unit,
 ) {
-    // 1. Load the thread when the composable first enters the composition
+    val viewModel: ChatConversationViewModel = viewModel(factory = viewModelFactory)
+    // Load the thread when the composable first enters the composition
     LaunchedEffect(threadId) {
         viewModel.loadThread(threadId)
     }
 
-    // 2. Observe the state flows
+    // Observe the state flows
     val thread by viewModel.thread.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val messages by viewModel.messages.collectAsState()
     val isAgentTyping by viewModel.isAgentTyping.collectAsState()
     val canLoadMore by viewModel.canLoadMore.collectAsState()
 
+    // Assuming the ViewModel exposes these properties for attachment handling
+    val pendingAttachments by viewModel.pendingAttachments.collectAsState(initial = emptyList())
+    val onRemovePendingAttachment = viewModel::onRemovePendingAttachment
+
+    // Attachment Selection State
+    var currentInputSelector by rememberSaveable { mutableStateOf(InputState.None) }
+    val dismissInputSelector: () -> Unit = { currentInputSelector = InputState.None }
+
     val listState = rememberLazyListState()
 
     val title = thread?.displayName ?: if (isLoading) "Loading..." else "Conversation"
 
-    // 3. Auto-scroll to the latest message whenever a new message or typing indicator appears
+    val context = LocalContext.current
+
+    // Auto-scroll to the latest message whenever a new message or typing indicator appears
     LaunchedEffect(messages.size, isAgentTyping) {
         if (messages.isNotEmpty() || isAgentTyping) {
             // Index 0 is the newest message/typing indicator in a reversed LazyColumn
@@ -180,11 +226,22 @@ fun SingleThreadScreen(
                         listState = listState,
                         loadMore = viewModel::loadMore
                     )
+                    // ATTACHMENT PREVIEW BAR
+                    AttachmentPreviewBar(
+                        attachments = pendingAttachments,
+                        onAttachmentClick = {
+                            // Implement attachment viewer logic here (e.g., viewModel.onAttachmentClicked(it))
+                            Log.d("Attachments", "Attachment clicked: ${it.friendlyName}")
+                        },
+                        onAttachmentRemoved = onRemovePendingAttachment
+                    )
 
                     MessageInput(
-                        onSend = viewModel::sendMessage,
+                        onSend = { text -> viewModel.sendMessage(text, context) },
                         onTypingStart = viewModel::reportTypingStarted,
-                        onTypingEnd = viewModel::reportTypingEnd
+                        onTypingEnd = viewModel::reportTypingEnd,
+                        onAttachmentClick = { currentInputSelector = InputState.Attachment },
+                        hasPendingAttachments = pendingAttachments.isNotEmpty()
                     )
                 }
                 else -> {
@@ -198,6 +255,18 @@ fun SingleThreadScreen(
                 }
             }
         }
+    }
+
+    // ATTACHMENT PICKER DIALOG (outside Scaffold/Column)
+    if (currentInputSelector == InputState.Attachment) {
+        AttachmentPickerDialog(
+            context,
+            onCloseRequested = dismissInputSelector,
+            onAttachmentTypeSelection = {uri, context, type ->
+                viewModel.onAttachmentUriReceived(uri, context, type)
+                dismissInputSelector()
+            }
+        )
     }
 }
 
@@ -247,6 +316,8 @@ private fun MessageItem(message: MessageDisplayItem) {
     val isUser = message.isUser
     val author = message.author
 
+    val attachments = message.attachments
+    val hasAttachments = attachments.isNotEmpty()
     // ASSUMPTION: Rich link check based on nullable properties in MessageDisplayItem
     val isRichLink = !message.richLink?.url.isNullOrBlank()
 
@@ -337,6 +408,16 @@ private fun MessageItem(message: MessageDisplayItem) {
                             color = textColor,
                             style = textStyle
                         )
+                        if (hasAttachments) {
+                            // Add a spacer if there was text above the attachments
+                            if (message.text.isNotBlank()) Spacer(Modifier.height(8.dp))
+                            AttachmentsContent(
+                                attachments = attachments,
+                                isUser = isUser,
+                                // Pass the text color for consistent attachment item coloring
+                                textColor = textColor
+                            )
+                        }
                     }
 
                     Row(
@@ -364,6 +445,129 @@ private fun MessageItem(message: MessageDisplayItem) {
         }
     }
 }
+
+
+/** Displays a list of attachments within a message bubble. */
+@Composable
+private fun AttachmentsContent(
+    attachments: List<Attachment>,
+    isUser: Boolean,
+    textColor: Color
+) {
+    val containerColor = if (isUser) MaterialTheme.colorScheme.inversePrimary else MaterialTheme.colorScheme.surface
+    val contentColor = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+    val attachmentContainerModifier = Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(8.dp))
+        .background(containerColor)
+        .border(
+            1.dp,
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+            RoundedCornerShape(8.dp)
+        )
+
+    Column(attachmentContainerModifier) {
+        attachments.forEachIndexed { index, attachment ->
+            AttachmentDisplayUiItem(
+                attachment = attachment,
+                contentColor = contentColor,
+                textColor = textColor
+            )
+            if (index < attachments.lastIndex) {
+                Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), thickness = 1.dp)
+            }
+        }
+    }
+}
+/** Displays a single attachment item (icon, name, size) for a sent message. */
+@Composable
+private fun AttachmentDisplayUiItem(
+    attachment: Attachment,
+    contentColor: Color,
+    textColor: Color,
+) {
+    val context = LocalContext.current
+    val isImage = attachment.mimeType?.startsWith("image/") == true
+
+    // Define the whole attachment item as clickable
+    val itemModifier = Modifier
+        .fillMaxWidth()
+        .clickable {
+            // Implement logic to open/download attachment here
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, attachment.url.toUri())
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                Log.e(
+                    "SingleThreadScreen",
+                    "Could not open attachment URL: ${attachment.url}",
+                    e
+                )
+            }
+        }
+
+    // The content is now a Column to stack the optional preview and the file information row
+    Column(modifier = itemModifier) {
+
+        // 1. Conditional Image Preview (for image attachments only)
+        if (isImage) {
+            ImagePreview(
+                attachment = attachment,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 100.dp) // Limit height for a clean preview size
+                    .padding(top = 8.dp, start = 8.dp, end = 8.dp) // Padding around the image
+                    .clip(RoundedCornerShape(4.dp)) // Small clip for the image itself
+            )
+        }
+
+        val attachmentIcon = when {
+            // Handle image types
+            attachment.mimeType?.startsWith("image/") == true -> Icons.Default.Image
+            // Handle video types
+            attachment.mimeType?.startsWith("video/") == true -> Icons.Default.Videocam
+            // Fallback for documents or unknown types
+            else -> Icons.Default.Description
+        }
+
+        // 2. File Information Row (Icon, Name, Download button)
+        // Add 8.dp padding for the content row
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Show file icon
+            Icon(
+                attachmentIcon,
+                contentDescription = null,
+                tint = contentColor,
+                modifier = Modifier.size(32.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    // Use Attachment.friendlyName
+                    text = attachment.friendlyName,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                    color = contentColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            // Optional download icon/button
+            Icon(
+                Icons.Default.Download,
+                contentDescription = "Download ${attachment.friendlyName}",
+                tint = textColor,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
 @Composable
 private fun AgentTypingIndicator(modifier: Modifier = Modifier) {
     Row(
@@ -404,6 +608,8 @@ private fun MessageInput(
     onSend: (String) -> Unit,
     onTypingStart: () -> Unit,
     onTypingEnd: () -> Unit,
+    onAttachmentClick: () -> Unit, // New callback for attachment button
+    hasPendingAttachments: Boolean // New state to enable send button if text is empty
 ) {
     var text by remember { mutableStateOf("") }
     val coroutineScope = rememberCoroutineScope()
@@ -430,7 +636,9 @@ private fun MessageInput(
     }
 
     val onSendClicked = {
-        if (text.isNotBlank()) {
+        // The ViewModel is responsible for checking if attachments exist if the text is blank.
+        // We only check if either text or pending attachments are present.
+        if (text.isNotBlank() || hasPendingAttachments) {
             onSend(text.trim())
             text = ""
             // Immediately report typing end after sending
@@ -446,6 +654,12 @@ private fun MessageInput(
             .background(MaterialTheme.colorScheme.surface),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // Attachment Button
+        IconButton(onClick = onAttachmentClick, modifier = Modifier.height(56.dp)) {
+            Icon(Icons.Default.AttachFile, contentDescription = "Attach file")
+        }
+        Spacer(Modifier.width(8.dp))
+
         OutlinedTextField(
             value = text,
             onValueChange = onTextChanged,
@@ -456,7 +670,7 @@ private fun MessageInput(
         Spacer(Modifier.width(8.dp))
         Button(
             onClick = onSendClicked,
-            enabled = text.isNotBlank(),
+            enabled = text.isNotBlank() || hasPendingAttachments,
             modifier = Modifier.height(56.dp)
         ) {
             Icon(Icons.Default.Send, contentDescription = "Send")
@@ -564,7 +778,7 @@ private fun RichLinkContent(
                 style = MaterialTheme.typography.labelMedium,
                 color = linkColor,
                 maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis
             )
             Spacer(Modifier.width(4.dp))
             Icon(
@@ -577,3 +791,224 @@ private fun RichLinkContent(
         Spacer(Modifier.height(8.dp)) // Padding at the bottom of the card content
     }
 }
+
+@Composable
+private fun AttachmentPreviewItem(
+    attachment: Attachment,
+    onAttachmentClick: (Attachment) -> Unit,
+    onAttachmentRemoved: (Attachment) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        contentAlignment = Alignment.TopEnd,
+        modifier = modifier.padding(end = 12.dp),
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .clickable(onClick = remember { { onAttachmentClick(attachment) } })
+        ) {
+            AttachmentPreview(
+                attachment = attachment,
+                modifier = Modifier.size(64.dp) // Set the fixed size for the thumbnail
+            )
+
+            Text(
+                text = attachment.friendlyName,
+                style = MaterialTheme.typography.labelSmall,
+                overflow = TextOverflow.MiddleEllipsis,
+                maxLines = 1,
+                modifier = Modifier.width(60.dp)
+            )
+        }
+
+        // Cancel Icon
+        IconButton(
+            onClick = remember { { onAttachmentRemoved(attachment) } },
+            modifier = Modifier
+                .size(20.dp)
+                .offset(x = 10.dp, y = (-10).dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.errorContainer)
+                .align(Alignment.TopEnd)
+        ) {
+            Icon(
+                Icons.Default.Close,
+                contentDescription = "Remove attachment ${attachment.friendlyName}",
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.size(12.dp)
+            )
+        }
+    }
+}
+
+/** the composable to show pending attachments. */
+@Composable
+private fun AttachmentPreviewBar(
+    attachments: List<Attachment>,
+    onAttachmentClick: (Attachment) -> Unit,
+    onAttachmentRemoved: (Attachment) -> Unit,
+) {
+    if (attachments.isEmpty()) return
+
+    Column {
+        Divider(Modifier.padding(horizontal = 8.dp))
+        LazyRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+        ) {
+            items(attachments, key = { it.url }) { attachment ->
+                AttachmentPreviewItem(
+                    attachment = attachment,
+                    onAttachmentClick = onAttachmentClick,
+                    onAttachmentRemoved = onAttachmentRemoved,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ImagePreview(
+    attachment: Attachment,
+    modifier: Modifier
+) {
+    val placeholderPainter = rememberVectorPainter(image = Icons.Outlined.Downloading)
+    val fallbackPainter = rememberVectorPainter(image = Icons.Outlined.Description)
+    val errorPainter = rememberVectorPainter(image = Icons.Outlined.ErrorOutline)
+    // Build the request with an error listener to capture failure details
+    val request = ImageRequest.Builder(LocalContext.current)
+        .data(attachment.url)
+        .crossfade(true)
+        .listener(onError = { _, result ->
+            // Log the error details to help debug network or token issues
+            Log.e(
+                "ImagePreview",
+                "Coil failed to load image: ${attachment.url}. Reason: ${result.throwable.message}",
+                result.throwable
+            )
+        })
+        .build()
+    AsyncImage(
+        model = request,
+        contentDescription = attachment.friendlyName,
+        contentScale = ContentScale.Fit,
+        placeholder = placeholderPainter,
+        fallback = fallbackPainter,
+        error = errorPainter,
+        modifier = modifier
+    )
+}
+
+/**
+ * Dispatches the rendering to the correct preview composable based on MIME type,
+ * similar to the logic in the SDK's AttachmentPreview.
+ */
+@Composable
+private fun AttachmentPreview(
+    attachment: Attachment,
+    modifier: Modifier
+) {
+    val mimeType = attachment.mimeType.orEmpty()
+
+    // Apply common framing/sizing for the attachment thumbnail
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .border(1.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        when {
+            // 1. Image Preview: Use AsyncImage to load the content URI
+            mimeType.startsWith("image/") -> ImagePreview(attachment, Modifier.fillMaxSize())
+
+            // 2. Video Preview: Use fixed icon for now (replace with video thumbnail logic if needed)
+            mimeType.startsWith("video/") -> Icon(
+                Icons.Default.Videocam,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(32.dp)
+            )
+
+            // 3. Document/Fallback Preview
+            else -> Icon(
+                Icons.Default.Description,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(32.dp)
+            )
+        }
+    }
+}
+
+/** the dialog for selecting attachment type. */
+@Composable
+private fun AttachmentPickerDialog(
+    context: Context,
+    onCloseRequested: () -> Unit,
+    onAttachmentTypeSelection: (Uri, Context, AttachmentType) -> Unit
+) {
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+        onResult = { uri: Uri? ->
+            uri?.let {
+                Log.i("SingleThreadScreen", "URI received. $uri")
+                onCloseRequested()
+                // Step 4: URI received. Pass the result back to the ViewModel for processing.
+                onAttachmentTypeSelection(it, context, AttachmentType.IMAGE)
+
+            }
+        }
+    )
+
+    AlertDialog(
+        onDismissRequest = onCloseRequested,
+        title = { Text("Select Attachment Type") },
+        text = {
+            Column {
+                AttachmentTypeItem(
+                    icon = Icons.Default.Image,
+                    label = "Photo or Image"
+                ) {
+                    Log.d("SingleThreadScreen", "Launching image picker.")
+                    imagePickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }
+
+                AttachmentTypeItem(
+                    icon = Icons.Default.Videocam,
+                    label = "Video"
+                ) {
+                }
+
+                AttachmentTypeItem(
+                    icon = Icons.Default.Description,
+                    label = "Document or File"
+                ) {
+                }
+            }
+        },
+        confirmButton = {
+            FilledTonalButton(onClick = onCloseRequested) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+private fun AttachmentTypeItem(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
+    ListItem(
+        headlineContent = { Text(label) },
+        leadingContent = { Icon(icon, contentDescription = label) },
+        modifier = Modifier.clickable(onClick = onClick)
+    )
+}
+
+/** the state of the user input area (similar to InputState in UserInput.kt). */
+internal enum class InputState { None, Attachment }

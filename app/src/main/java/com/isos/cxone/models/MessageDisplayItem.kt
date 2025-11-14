@@ -1,9 +1,8 @@
 package com.isos.cxone.models
 
-import com.isos.cxone.viewmodel.AttachmentDisplayItem
-import com.isos.cxone.viewmodel.RichLinkDisplayItem
 import java.util.Date
 import java.util.UUID
+import com.nice.cxonechat.message.Attachment
 
 data class MessageDisplayItem(
     val id: UUID,
@@ -11,7 +10,16 @@ data class MessageDisplayItem(
     val isUser: Boolean,
     val createdAt: Date,
     val status: String, // e.g., "Sending", "Sent", "Read"
-    val attachments: List<AttachmentDisplayItem> = emptyList(),
+    val attachments: List<Attachment> = emptyList(),
     val richLink: RichLinkDisplayItem? = null,
     val author: Person? = null
+)
+
+/**
+ * Data class to hold properties of a RichLink message for UI display.
+ */
+data class RichLinkDisplayItem(
+    val title: String,
+    val url: String,
+    val imageUrl: String? = null
 )

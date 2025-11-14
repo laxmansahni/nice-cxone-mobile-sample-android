@@ -38,22 +38,24 @@ import com.nice.cxonechat.message.MessageMetadata
 import com.nice.cxonechat.message.MessageAuthor
 import com.nice.cxonechat.message.MessageStatus
 import com.isos.cxone.models.MessageDisplayItem
+import com.isos.cxone.models.RichLinkDisplayItem
 import com.isos.cxone.models.asPerson
 import com.nice.cxonechat.message.OutboundMessage
 import com.nice.cxonechat.ChatThreadMessageHandler.OnMessageTransferListener
 import kotlinx.coroutines.flow.update
 import java.lang.ref.WeakReference
-
-data class AttachmentDisplayItem(val name: String, val url: String)
-
+import com.nice.cxonechat.message.Attachment
+import com.nice.cxonechat.message.ContentDescriptor
+import com.isos.cxone.attachment.AttachmentResolver
+import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
 /**
- * Data class to hold properties of a RichLink message for UI display.
+ * Temporary local definition of AttachmentType, assuming it exists in the SDK.
+ * This is defined here to ensure the ViewModel is runnable.
  */
-data class RichLinkDisplayItem(
-    val title: String,
-    val url: String,
-    val imageUrl: String? = null
-)
+
+enum class AttachmentType { IMAGE, VIDEO, DOCUMENT }
 
 /**
  * Temporary message object used before the SDK confirms receipt.
@@ -64,18 +66,18 @@ data class RichLinkDisplayItem(
 data class TemporarySentMessage(
     val localId: UUID,
     val text: String,
-    val attachments: List<AttachmentDisplayItem> = emptyList(),
+    val attachments: Iterable<Attachment>,
     val createdAt: Date = Date(),
     val metadata: MessageMetadata,
     val author: MessageAuthor,
     val direction: MessageDirection = ToAgent
 ) {
     // Constructor using anonymous objects for MessageMetadata and MessageAuthor
-    constructor(id: UUID, text: String) : this(
+    constructor(id: UUID, text: String, attachments: List<Attachment>) : this(
         localId = id,
         text = text,
         createdAt = Date(),
-        attachments = emptyList(),
+        attachments = attachments,
         metadata = object : MessageMetadata {
             override val seenAt: Date? = null
             override val readAt: Date? = null
@@ -96,7 +98,8 @@ data class TemporarySentMessage(
     }
 }
 
-class ChatConversationViewModel : ViewModel() {
+class ChatConversationViewModel(private val attachmentResolver: AttachmentResolver)
+    : ViewModel() {
 
     companion object {
         private const val TAG = "ChatConversationViewModel"
@@ -121,8 +124,19 @@ class ChatConversationViewModel : ViewModel() {
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    // --- ATTACHMENT STATE ---
+
+    private val _pendingAttachments = MutableStateFlow<List<Attachment>>(emptyList())
+
+    /** List of attachments the user has selected but not yet sent. */
+    val pendingAttachments: StateFlow<List<Attachment>> = _pendingAttachments.asStateFlow()
+
+
+    // --- END ATTACHMENT STATE ---
+
     // StateFlow to hold temporary messages that are being sent but not yet confirmed by the SDK
     private val sentMessagesFlow = MutableStateFlow<Map<UUID, TemporarySentMessage>>(emptyMap())
+
     /** The stream of messages confirmed by the SDK. */
     private val sdkMessagesFlow: Flow<List<MessageDisplayItem>> = _thread
         .map { it?.chatThread?.messages }
@@ -146,6 +160,7 @@ class ChatConversationViewModel : ViewModel() {
                             imageUrl = sdkMsg.media.url
                         )
                     }
+
                     is Message.Unsupported -> messageText = "Unsupported message content"
                 }
 
@@ -156,9 +171,7 @@ class ChatConversationViewModel : ViewModel() {
                     createdAt = sdkMsg.createdAt,
                     status = sdkMsg.metadata.status.toString(),
                     // Map SDK Attachments to local SimpleAttachment data class
-                    attachments = sdkMsg.attachments.map { sdkAttachment ->
-                        AttachmentDisplayItem(sdkAttachment.friendlyName, sdkAttachment.url)
-                    },
+                    attachments = sdkMsg.attachments.toList(),
                     richLink = richLinkItem, // Assign the rich link data
                     author = sdkMsg.author?.asPerson
 
@@ -182,7 +195,7 @@ class ChatConversationViewModel : ViewModel() {
                     isUser = true,
                     createdAt = tempMsg.createdAt,
                     status = "Sending",
-                    attachments = tempMsg.attachments
+                    attachments = tempMsg.attachments.toList()
                 )
                 allMessages.add(tempUiMsg)
             }
@@ -204,6 +217,7 @@ class ChatConversationViewModel : ViewModel() {
         .map { it?.chatThread?.hasMoreMessagesToLoad ?: false }
         .distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
     /**
      * Private mapping function that determines the display name based on ChatMode.
      */
@@ -311,7 +325,6 @@ class ChatConversationViewModel : ViewModel() {
     }
 
 
-
     private fun attachThreadFlow(handler: ChatThreadHandler) {
         cancellableThread?.cancel()
 
@@ -363,30 +376,61 @@ class ChatConversationViewModel : ViewModel() {
     /**
      * Sends a text message by constructing an OutboundMessage and using the OnMessageSentListener
      * pattern for immediate UI feedback.
+     * @param text The message text to send.
+     * @param context The Android Context needed to resolve file attachments into ContentDescriptors.
      */
-    fun sendMessage(text: String) {
-        if (text.isBlank()) return
+    fun sendMessage(text: String, context: Context) {
+        // Only send if there is text OR pending attachments
+        if (text.isBlank() && _pendingAttachments.value.isEmpty()) return
 
-        // 1. Construct the SDK's OutboundMessage
-        val outboundMessage = OutboundMessage(message = text)
-
-        val appMessage: (UUID) -> TemporarySentMessage = { id ->
-            // Create a TemporarySentMessage with the UUID returned by the listener (localId here)
-            TemporarySentMessage(id, text)
-        }
-
-        // 2. Create the listener to handle UI state updates
-        val listener = OnMessageSentListener(
-            message = appMessage,
-            flow = sentMessagesFlow,
-            loaderFlow = _isLoading
-        )
+        val pendingItems = _pendingAttachments.value
 
         // 3. Send the message via SDK using the listener
         viewModelScope.launch {
             try {
+                // CRITICAL STEP: Convert the UI-tracking Attachment list to the SDK-required ContentDescriptor list.
+                // This requires calling the suspending method on the resolver.
+                val resolvedAttachments: List<ContentDescriptor> = pendingItems.mapNotNull { item ->
+                    // Use the injected resolver to get the ContentDescriptor
+                    attachmentResolver.resolveToContentDescriptor(item, context)
+                }
+
+                if (pendingItems.isNotEmpty() && resolvedAttachments.size != pendingItems.size) {
+                    // Basic error handling for failed resolution (e.g., file too large)
+                    Log.e(
+                        TAG,
+                        "Failed to resolve all attachments. Only resolved ${resolvedAttachments.size} out of ${pendingItems.size}. Sending available attachments."
+                    )
+                }
+
+                // 2. Construct the SDK's OutboundMessage, including ContentDescriptors
+                val outboundMessage = OutboundMessage(
+                    message = text,
+                    // FIX: Pass the List<ContentDescriptor> to OutboundMessage
+                    attachments = resolvedAttachments
+                )
+
+                // 3. Create a temporary message for immediate UI update
+                val appMessage: (UUID) -> TemporarySentMessage = { id ->
+                    // Pass the original Attachment list (for UI) to the temporary message constructor
+                    TemporarySentMessage(id, text, attachments = pendingItems)
+                }
+
+                // 4. Create the listener to handle UI state updates
+                val listener = OnMessageSentListener(
+                    message = appMessage,
+                    flow = sentMessagesFlow,
+                    loaderFlow = _isLoading
+                )
+
+                // 5. Send the message
                 threadHandler?.messages()?.send(outboundMessage, listener)
-                Log.d(TAG, "Sent message via SDK using listener: $text")
+                Log.d(
+                    TAG,
+                    "Sent message via SDK using listener: $text with ${resolvedAttachments.size} ContentDescriptors"
+                )
+                // Clear pending attachments immediately after successful hand-off to SDK
+                _pendingAttachments.value = emptyList()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to send message", e)
                 // In case of immediate failure, manually stop the loader
@@ -394,6 +438,7 @@ class ChatConversationViewModel : ViewModel() {
             }
         }
     }
+
     /**
      * Implements OnMessageTransferListener to manage the state of the temporary message
      * in the UI based on SDK feedback.
@@ -428,6 +473,25 @@ class ChatConversationViewModel : ViewModel() {
         }
     }
 
+    fun onAttachmentUriReceived(uri: Uri, context: Context, type: AttachmentType) {
+        // 1. Create a local Attachment object from the Uri metadata.
+        val attachment = createAttachmentFromUri(uri, context, type)
+        // 2. Apply duplicate check based on the attachment's URL (which holds the file URI string)
+        _pendingAttachments.update { currentList ->
+            if (currentList.any { it.url == attachment.url }) {
+                Log.w(TAG, "Attachment with URL ${attachment.url} (File: ${attachment.friendlyName}) already exists in pending queue. Skipping addition.")
+                // Return the current list unchanged if a duplicate is found
+                currentList
+            } else {
+                // Add the new attachment if no duplicate is found
+                currentList + attachment
+            }
+        }
+        Log.d(TAG, "Attachment processed: ${attachment.friendlyName}")
+    }
+    fun onRemovePendingAttachment(attachment: Attachment) {
+        _pendingAttachments.value = _pendingAttachments.value.filter { it.url != attachment.url }
+    }
     fun reportTypingStarted() {
         viewModelScope.launch {
             threadHandler?.events()?.typingStart()
@@ -437,6 +501,56 @@ class ChatConversationViewModel : ViewModel() {
     fun reportTypingEnd() {
         viewModelScope.launch {
             threadHandler?.events()?.typingEnd()
+        }
+    }
+
+    /**
+     * Converts a content Uri into an SDK Attachment object for local display and pending queue.
+     * This function queries the ContentResolver to extract the friendly file name and MIME type.
+     *
+     * @param uri The content Uri representing the selected file.
+     * @param context The Android Context needed to access the ContentResolver.
+     * @param type The AttachmentType hint (Image, Video, Document).
+     * @return An anonymous implementation of the SDK's Attachment interface.
+     */
+    private fun createAttachmentFromUri(uri: Uri, context: Context, type: AttachmentType): Attachment {
+        val contentResolver = context.contentResolver
+        var friendlyName: String = uri.lastPathSegment ?: "Attachment"
+        var mimeType: String? = null
+
+        // 1. Attempt to query ContentResolver for official file name and MIME type
+        try {
+            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    // Try to get display name
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameIndex != -1) {
+                        friendlyName = cursor.getString(nameIndex) ?: friendlyName
+                    }
+                }
+            }
+            // 2. Get MIME type from content resolver
+            mimeType = contentResolver.getType(uri)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error resolving URI metadata for $uri", e)
+        }
+
+        // 3. Fallback MIME type based on the selected AttachmentType
+        mimeType = mimeType ?: when (type) {
+            AttachmentType.IMAGE -> "image/*"
+            AttachmentType.VIDEO -> "video/*"
+            AttachmentType.DOCUMENT -> "application/octet-stream"
+        }
+
+        // 4. Create an anonymous object implementing the SDK's Attachment interface
+        val finalFriendlyName = friendlyName
+        val finalMimeType = mimeType
+
+        return object : Attachment {
+            override val friendlyName: String = finalFriendlyName
+            // The URL field of Attachment is used here to store the local file URI string for display/tracking
+            override val url: String = uri.toString()
+            override val mimeType: String? = finalMimeType
         }
     }
 
