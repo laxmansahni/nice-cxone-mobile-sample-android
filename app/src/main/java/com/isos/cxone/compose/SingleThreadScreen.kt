@@ -189,7 +189,10 @@ fun SingleThreadScreen(
     LaunchedEffect(messages.size, isAgentTyping) {
         if (messages.isNotEmpty() || isAgentTyping) {
             // Index 0 is the newest message/typing indicator in a reversed LazyColumn
-            listState.animateScrollToItem(0)
+            // Only scroll if we are close to the bottom to avoid interruption when loading older messages
+            if (listState.firstVisibleItemIndex < 5) {
+                listState.animateScrollToItem(0)
+            }
         }
     }
 
@@ -224,7 +227,8 @@ fun SingleThreadScreen(
                         isAgentTyping = isAgentTyping,
                         canLoadMore = canLoadMore,
                         listState = listState,
-                        loadMore = viewModel::loadMore
+                        loadMore = viewModel::loadMore,
+                        isViewModelLoading = isLoading
                     )
                     // ATTACHMENT PREVIEW BAR
                     AttachmentPreviewBar(
@@ -277,7 +281,29 @@ private fun ColumnScope.ChatHistory(
     canLoadMore: Boolean,
     listState: LazyListState,
     loadMore: () -> Unit,
+    isViewModelLoading: Boolean,
 ) {
+    // Implement scroll-to-top detection for pagination here.
+    // This correctly triggers loadMore() when the user scrolls to the top of the history.
+    LaunchedEffect(listState, canLoadMore, isViewModelLoading) {
+        snapshotFlow {
+            val layoutInfo = listState.layoutInfo
+            val oldestItemIndex = messages.size - 1
+
+            // Trigger load when the last item (oldest message) is visible.
+            // In a reversed list, the last index is the "top" of the history.
+            layoutInfo.visibleItemsInfo.lastOrNull()?.index == oldestItemIndex && messages.isNotEmpty()
+        }
+            .collect { isScrolledToTop ->
+                if (canLoadMore && isScrolledToTop && !isViewModelLoading) {
+                    // Add a small delay to debounce rapid scroll events
+                    delay(100)
+                    Log.d("ChatHistory", "Scroll detected near top. Triggering loadMore().")
+                    loadMore()
+                }
+            }
+    }
+
     LazyColumn(
         reverseLayout = true,
         state = listState,
@@ -296,9 +322,11 @@ private fun ColumnScope.ChatHistory(
         }
 
         // Load more indicator is at the top of the reversed list
-        if (canLoadMore) {
+        // Display the indicator only if a load is actively in progress AND more data is available.
+        // The triggering logic is now in the LaunchedEffect above.
+        if (isViewModelLoading && canLoadMore) {
             item(key = "load_more") {
-                LoadMoreIndicator { loadMore() }
+                LoadMoreIndicator()
             }
         }
 
@@ -488,6 +516,7 @@ private fun AttachmentDisplayUiItem(
 ) {
     val context = LocalContext.current
     val isImage = attachment.mimeType?.startsWith("image/") == true
+    val isVideo = attachment.mimeType?.startsWith("video/") == true
 
     // Define the whole attachment item as clickable
     val itemModifier = Modifier
@@ -512,6 +541,15 @@ private fun AttachmentDisplayUiItem(
         // 1. Conditional Image Preview (for image attachments only)
         if (isImage) {
             ImagePreview(
+                attachment = attachment,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 100.dp) // Limit height for a clean preview size
+                    .padding(top = 8.dp, start = 8.dp, end = 8.dp) // Padding around the image
+                    .clip(RoundedCornerShape(4.dp)) // Small clip for the image itself
+            )
+        } else if (isVideo) {
+            VideoPreview(
                 attachment = attachment,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -588,17 +626,15 @@ private fun AgentTypingIndicator(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun LoadMoreIndicator(loadMore: () -> Unit) {
-    // Automatically trigger loadMore when this item appears (i.e., when scrolling to the top)
-    LaunchedEffect(Unit) {
-        loadMore()
-    }
+private fun LoadMoreIndicator() {
+    // Removed the LaunchedEffect(Unit) which caused the infinite loop
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .padding(8.dp),
         contentAlignment = Alignment.Center
     ) {
+        // This indicator is now only included in the composition when isViewModelLoading is true.
         CircularProgressIndicator(Modifier.width(24.dp))
     }
 }
@@ -924,14 +960,8 @@ private fun AttachmentPreview(
             // 1. Image Preview: Use AsyncImage to load the content URI
             mimeType.startsWith("image/") -> ImagePreview(attachment, Modifier.fillMaxSize())
 
-            // 2. Video Preview: Use fixed icon for now (replace with video thumbnail logic if needed)
-            mimeType.startsWith("video/") -> Icon(
-                Icons.Default.Videocam,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.size(32.dp)
-            )
-
+            // 2. Video Preview: Use the new VideoPreview logic
+            mimeType.startsWith("video/") -> VideoPreview(attachment, Modifier.fillMaxSize())
             // 3. Document/Fallback Preview
             else -> Icon(
                 Icons.Default.Description,
@@ -963,6 +993,19 @@ private fun AttachmentPickerDialog(
         }
     )
 
+    val videoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+        onResult = { uri: Uri? ->
+            uri?.let {
+                Log.i("SingleThreadScreen", "URI received. $uri")
+                onCloseRequested()
+                // Step 4: URI received. Pass the result back to the ViewModel for processing.
+                onAttachmentTypeSelection(it, context, AttachmentType.VIDEO)
+
+            }
+        }
+    )
+
     AlertDialog(
         onDismissRequest = onCloseRequested,
         title = { Text("Select Attachment Type") },
@@ -980,6 +1023,8 @@ private fun AttachmentPickerDialog(
                     icon = Icons.Default.Videocam,
                     label = "Video"
                 ) {
+                    Log.d("SingleThreadScreen", "Launching video picker.")
+                    videoPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
                 }
 
                 AttachmentTypeItem(

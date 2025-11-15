@@ -75,15 +75,15 @@ fun SimplePreChatSurveyInput(
         fieldsToRender.filter { it.isRequired }.map { it.fieldId }.toSet()
     }
 
+    // By computing this directly, it ensures the set recalculates on every recomposition,
+    // which is triggered when responseMap changes.
     // The set of IDs for all fields that have a non-empty response value from the user
-    val answeredFieldIds = remember(responseMap) {
-        responseMap.filterValues { it.isNotEmpty() }.keys
-    }
+    val answeredFieldIds = responseMap.filterValues { it.isNotEmpty() }.keys
 
+    // This validation logic now correctly uses the
+    // up-to-date answeredFieldIds set on every recomposition.
     // Validation logic: check if all required field IDs are present in the answered field IDs
-    val areAllRequiredFieldsAnswered = remember(requiredFieldIds, answeredFieldIds) {
-        answeredFieldIds.containsAll(requiredFieldIds)
-    }
+    val areAllRequiredFieldsAnswered = answeredFieldIds.containsAll(requiredFieldIds)
 
     Column(
         modifier = Modifier
