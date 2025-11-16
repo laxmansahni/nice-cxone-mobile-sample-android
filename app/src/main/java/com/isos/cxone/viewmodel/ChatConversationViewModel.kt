@@ -131,7 +131,15 @@ class ChatConversationViewModel(private val attachmentResolver: AttachmentResolv
     /** List of attachments the user has selected but not yet sent. */
     val pendingAttachments: StateFlow<List<Attachment>> = _pendingAttachments.asStateFlow()
 
-
+    /**
+     * Retrieves the list of MIME types allowed for documents, sourced from the SDK configuration.
+     * Maps the SDK's AllowedFileType objects to a simple List<String> of mime types.
+     */
+    val allowedMimeTypes: StateFlow<List<String>> = MutableStateFlow(
+        chat
+            .configuration
+            .fileRestrictions
+            .allowedFileTypes.map { it.mimeType }).asStateFlow()
     // --- END ATTACHMENT STATE ---
 
     // StateFlow to hold temporary messages that are being sent but not yet confirmed by the SDK

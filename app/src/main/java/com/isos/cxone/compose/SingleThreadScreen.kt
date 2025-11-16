@@ -91,12 +91,15 @@ import com.isos.cxone.util.ChatConversationViewModelFactory
 import androidx.compose.material.icons.filled.Download
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Downloading
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import com.isos.cxone.util.openWithAndroid
+import android.widget.Toast
 
 private val JumboEmojiStyle = TextStyle(
     fontSize = 34.sp,
@@ -174,6 +177,7 @@ fun SingleThreadScreen(
     // Assuming the ViewModel exposes these properties for attachment handling
     val pendingAttachments by viewModel.pendingAttachments.collectAsState(initial = emptyList())
     val onRemovePendingAttachment = viewModel::onRemovePendingAttachment
+    val allowedMimeTypes by viewModel.allowedMimeTypes.collectAsState()
 
     // Attachment Selection State
     var currentInputSelector by rememberSaveable { mutableStateOf(InputState.None) }
@@ -220,6 +224,7 @@ fun SingleThreadScreen(
                         CircularProgressIndicator()
                     }
                 }
+
                 thread != null -> {
                     // Full Chat UI
                     ChatHistory(
@@ -248,6 +253,7 @@ fun SingleThreadScreen(
                         hasPendingAttachments = pendingAttachments.isNotEmpty()
                     )
                 }
+
                 else -> {
                     // Error/Not found state
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -266,10 +272,11 @@ fun SingleThreadScreen(
         AttachmentPickerDialog(
             context,
             onCloseRequested = dismissInputSelector,
-            onAttachmentTypeSelection = {uri, context, type ->
+            onAttachmentTypeSelection = { uri, context, type ->
                 viewModel.onAttachmentUriReceived(uri, context, type)
                 dismissInputSelector()
-            }
+            },
+            allowedMimeTypes
         )
     }
 }
@@ -482,8 +489,10 @@ private fun AttachmentsContent(
     isUser: Boolean,
     textColor: Color
 ) {
-    val containerColor = if (isUser) MaterialTheme.colorScheme.inversePrimary else MaterialTheme.colorScheme.surface
-    val contentColor = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+    val containerColor =
+        if (isUser) MaterialTheme.colorScheme.inversePrimary else MaterialTheme.colorScheme.surface
+    val contentColor =
+        if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
     val attachmentContainerModifier = Modifier
         .fillMaxWidth()
         .clip(RoundedCornerShape(8.dp))
@@ -502,11 +511,15 @@ private fun AttachmentsContent(
                 textColor = textColor
             )
             if (index < attachments.lastIndex) {
-                Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), thickness = 1.dp)
+                Divider(
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                    thickness = 1.dp
+                )
             }
         }
     }
 }
+
 /** Displays a single attachment item (icon, name, size) for a sent message. */
 @Composable
 private fun AttachmentDisplayUiItem(
@@ -517,21 +530,23 @@ private fun AttachmentDisplayUiItem(
     val context = LocalContext.current
     val isImage = attachment.mimeType?.startsWith("image/") == true
     val isVideo = attachment.mimeType?.startsWith("video/") == true
-
+    val isDocument = attachment.mimeType?.startsWith("application/pdf") == true
     // Define the whole attachment item as clickable
     val itemModifier = Modifier
         .fillMaxWidth()
         .clickable {
-            // Implement logic to open/download attachment here
-            try {
-                val intent = Intent(Intent.ACTION_VIEW, attachment.url.toUri())
-                context.startActivity(intent)
-            } catch (e: Exception) {
-                Log.e(
-                    "SingleThreadScreen",
-                    "Could not open attachment URL: ${attachment.url}",
-                    e
-                )
+            val wasOpenedSuccessfully = context.openWithAndroid(
+                url = attachment.url,
+                mimeType = attachment.mimeType
+            )
+            if (!wasOpenedSuccessfully) {
+                Toast.makeText(
+                    context,
+                    "No app found on this device to open this type of file.",
+                    Toast.LENGTH_SHORT
+                ).show()
+                // since the system couldn't find an app to resolve the intent.
+                Log.e("SingleThreadScreen", "No activity found to open attachment: ${attachment.mimeType}")
             }
         }
 
@@ -557,8 +572,27 @@ private fun AttachmentDisplayUiItem(
                     .padding(top = 8.dp, start = 8.dp, end = 8.dp) // Padding around the image
                     .clip(RoundedCornerShape(4.dp)) // Small clip for the image itself
             )
+        } else if (isDocument) {
+            // Use DocumentPreview (specifically PDF)
+            DocumentPreview(
+                attachment = attachment,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 100.dp) // Limit height
+                    .padding(top = 8.dp, start = 8.dp, end = 8.dp)
+                    .clip(RoundedCornerShape(4.dp))
+            )
+        } // 4. Fallback for all other MIME types (doc, xls, general app/*, etc.)
+        else {
+            FallbackThumbnail(
+                attachment = attachment,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 100.dp) // Limit height
+                    .padding(top = 8.dp, start = 8.dp, end = 8.dp)
+                    .clip(RoundedCornerShape(4.dp))
+            )
         }
-
         val attachmentIcon = when {
             // Handle image types
             attachment.mimeType?.startsWith("image/") == true -> Icons.Default.Image
@@ -962,12 +996,16 @@ private fun AttachmentPreview(
 
             // 2. Video Preview: Use the new VideoPreview logic
             mimeType.startsWith("video/") -> VideoPreview(attachment, Modifier.fillMaxSize())
-            // 3. Document/Fallback Preview
-            else -> Icon(
-                Icons.Default.Description,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                modifier = Modifier.size(32.dp)
+            // 3. Document Preview (specifically PDF)
+            mimeType.startsWith("application/pdf", ignoreCase = true) -> DocumentPreview(
+                attachment = attachment,
+                modifier = Modifier.fillMaxSize()
+            )
+
+            // 4. Fallback for all other MIME types (doc, xls, general app/*, etc.)
+            else -> FallbackThumbnail(
+                attachment = attachment,
+                modifier = Modifier.fillMaxSize()
             )
         }
     }
@@ -978,16 +1016,17 @@ private fun AttachmentPreview(
 private fun AttachmentPickerDialog(
     context: Context,
     onCloseRequested: () -> Unit,
-    onAttachmentTypeSelection: (Uri, Context, AttachmentType) -> Unit
+    onAttachmentTypeSelection: (Uri, Context, AttachmentType) -> Unit,
+    allowedMimeTypes: List<String>
 ) {
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
         onResult = { uri: Uri? ->
             uri?.let {
                 Log.i("SingleThreadScreen", "URI received. $uri")
-                onCloseRequested()
                 // Step 4: URI received. Pass the result back to the ViewModel for processing.
                 onAttachmentTypeSelection(it, context, AttachmentType.IMAGE)
+                onCloseRequested()
 
             }
         }
@@ -998,11 +1037,28 @@ private fun AttachmentPickerDialog(
         onResult = { uri: Uri? ->
             uri?.let {
                 Log.i("SingleThreadScreen", "URI received. $uri")
-                onCloseRequested()
                 // Step 4: URI received. Pass the result back to the ViewModel for processing.
                 onAttachmentTypeSelection(it, context, AttachmentType.VIDEO)
+                onCloseRequested()
 
             }
+        }
+    )
+
+    // LAUNCHER FOR GENERIC DOCUMENTS/FILES
+    val documentPickerLauncher = rememberLauncherForActivityResult(
+        // OpenMultipleDocuments allows selecting files based on an array of MIME types
+        contract = OpenMultipleDocuments(),
+        onResult = { uris: List<Uri> ->
+            // Process all selected URIs
+            uris.forEach { uri ->
+                Log.i("SingleThreadScreen", "Document URI received: $uri")
+                // Step 4: URI received. Pass the result back to the ViewModel for processing.
+                // Note: The ViewModel handles adding to the pending list.
+                onAttachmentTypeSelection(uri, context, AttachmentType.DOCUMENT)
+            }
+            // Dismiss the dialog once file selection is complete (even if no files were picked)
+            onCloseRequested()
         }
     )
 
@@ -1031,6 +1087,22 @@ private fun AttachmentPickerDialog(
                     icon = Icons.Default.Description,
                     label = "Document or File"
                 ) {
+                    // Filter the MIME types to exclude those already handled or unsupported (image/*, video/*, audio/*)
+                    val filteredMimeTypes = allowedMimeTypes.filter { mimeType ->
+                        !mimeType.startsWith("image/") &&
+                                !mimeType.startsWith("video/") &&
+                                !mimeType.startsWith("audio/")
+                    }
+
+                    // Convert the filtered list to an array as required by OpenMultipleDocuments
+                    val mimeTypeArray = filteredMimeTypes.toTypedArray()
+
+                    Log.d(
+                        "SingleThreadScreen",
+                        "Launching document picker with MIME types: ${mimeTypeArray.joinToString()}"
+                    )
+
+                    documentPickerLauncher.launch(mimeTypeArray)
                 }
             }
         },

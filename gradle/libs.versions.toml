@@ -11,6 +11,7 @@ composeBom = "2024.09.00"
 androidNavigation = "2.8.9"
 coilVersion = "3.3.0"
 emoji2Version = "1.6.0"
+ktorVersion = "3.3.0"
 
 # --- ADDED: NICE CXONE SDK Version ---
 nice-sdk-chat = "3.1.0"
@@ -36,6 +37,8 @@ androidx-compose-material3 = { group = "androidx.compose.material3", name = "mat
 androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
 android-coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coilVersion"}
 android-coil-video = { group = "io.coil-kt.coil3", name = "coil-video", version.ref = "coilVersion"}
+coil-network-ktor = { group = "io.coil-kt.coil3", name = "coil-network-ktor3", version.ref = "coilVersion"}
+android-ktor-client = { group = "io.ktor", name = "ktor-client-android", version.ref = "ktorVersion"}
 androidx-emoji2 = { group = "androidx.emoji2", name = "emoji2", version.ref = "emoji2Version"}
 
 #android navigation
@@ -55,4 +58,11 @@ kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", versi
 compose-material = [
     "androidx-compose-material3",
     "androidx-compose-material-icons-extended"
+]
+
+coil-compose = [
+    "android-coil-compose",
+    "android-coil-video",
+    "coil-network-ktor",
+    "android-ktor-client"
 ]
