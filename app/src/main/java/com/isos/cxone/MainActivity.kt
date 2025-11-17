@@ -41,6 +41,9 @@ class MainActivity : ComponentActivity(), ChatInstanceProvider.Listener {
     // Renamed to liveChatState to clearly indicate it is the mutable, live source of the Compose state.
     private val liveChatState = mutableStateOf<ChatState>(Initial)
 
+    // Track the last state that triggered a UI Toast/Action to prevent re-firing on Activity resume.
+    private var lastProcessedChatState: ChatState? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -84,8 +87,20 @@ class MainActivity : ComponentActivity(), ChatInstanceProvider.Listener {
     override fun onChatStateChanged(chatState: ChatState) {
         Log.i(TAG, "Chat State Changed: $chatState")
 
+        // 1. Check for duplicate state (FIX)
+        if (lastProcessedChatState == chatState) {
+            Log.d(TAG, "Ignoring duplicate ChatState change: $chatState")
+            // Still update the live state so Compose reflects the current status on screen resume,
+            // but skip the side-effects (Toasts, connect calls) that don't need to be repeated.
+            liveChatState.value = chatState
+            return
+        }
+
         // 2. Update the Live State: Updating this MutableState triggers recomposition in MainScreen.
         liveChatState.value = chatState
+
+        // Update the last processed state BEFORE running side effects (like Toasts/API calls)
+        lastProcessedChatState = chatState
 
         // Ensure all UI operations run on the Main Thread
         runOnUiThread {
