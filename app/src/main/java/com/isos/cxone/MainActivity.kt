@@ -151,6 +151,22 @@ class MainActivity : ComponentActivity(), ChatInstanceProvider.Listener {
                     }
 
                     Ready -> {
+                        val customerCustomValues = mapOf(
+                            "amc" to "defaultAMC",
+                            "city_country" to "India",
+                            "client_name" to "Johnson & Johnson",
+                            "email" to "itus@yopmail.com",
+                            "first_name" to "IT",
+                            "last_name" to "US",
+                            "lat_long" to "28.4682|77.5090",
+                            "membership_number" to "44977",
+                            "phone_number" to "+917509029408",
+                            "product_status" to "active",
+                        )
+                        val provider = ChatInstanceProvider.get()
+                        provider.setCustomerValues(customerCustomValues)
+                        Log.i(TAG, "ChatInstanceProvider customer values set: $customerCustomValues")
+
                         Toast.makeText(
                             this,
                             "Chat READY! You can now start the chat session.",
