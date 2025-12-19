@@ -15,6 +15,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import com.isos.cxone.ui.theme.CxoneSampleTheme
+import com.isos.cxone.util.ChatErrorCoordinator
 import com.nice.cxonechat.ChatInstanceProvider
 import com.nice.cxonechat.Chat
 import com.nice.cxonechat.ChatState
@@ -76,6 +77,7 @@ class MainActivity : ComponentActivity(), ChatInstanceProvider.Listener {
             Log.d(TAG, "ChatInstanceProvider listener unregistered.")
         } catch (e: IllegalStateException) {
             // Ignore if the instance was never created
+            Log.d(TAG, "ChatInstanceProvider not initialized, skipping listener removal.", e)
         }
     }
 
@@ -152,7 +154,7 @@ class MainActivity : ComponentActivity(), ChatInstanceProvider.Listener {
 
                     Ready -> {
                         val customerCustomValues = mapOf(
-                            "amc" to "defaultAMC",
+                            "amc" to "Philadelphia",
                             "city_country" to "India",
                             "client_name" to "Johnson & Johnson",
                             "email" to "itus@yopmail.com",
@@ -209,6 +211,16 @@ class MainActivity : ComponentActivity(), ChatInstanceProvider.Listener {
      */
     override fun onChatRuntimeException(exception: RuntimeChatException) {
         // Since this might also be called from a background thread, ensure UI work runs on main thread
+        var errorType = "GeneralRuntimeError"
+        // If it's a server communication error, extract the specific code (e.g., SendingMessageFailed)
+        if (exception is RuntimeChatException.ServerCommunicationError) {
+            // The SDK's 'message' for this exception IS the ErrorType value
+            errorType = exception.message ?: "ServerCommunicationError"
+        }
+        // Trigger internal ViewModel cleanup if a message fails
+        if (errorType == "SendingMessageFailed") {
+            ChatErrorCoordinator.emitError(errorType)
+        }
         runOnUiThread {
             Log.e(TAG, "SDK Runtime Exception: ${exception.message}", exception)
             Toast.makeText(this, "Chat Error: ${exception.message}", Toast.LENGTH_LONG).show()

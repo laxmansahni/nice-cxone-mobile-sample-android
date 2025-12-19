@@ -28,10 +28,12 @@ class CxoneSampleApplication : Application() {
             "Singh",
             "Kuldeep"
         )
+
+        val customerId = "AAAAAAAAAAAAAAAAuL05jlHBUi47gWExyneZinhtbF0Wejz1wKm4wdut0dVJvmadbRFKamSbeBa5kU6mBfsPz_RPFCY"
         // 2. Create the singleton ChatInstanceProvider
         try {
             // Note: This method automatically creates the singleton instance and logs the state.
-            ChatInstanceProvider.create(config, userName = userName)
+            ChatInstanceProvider.create(config, userName = userName, customerId = customerId)
             Log.i(TAG, "ChatInstanceProvider created successfully.")
 
             // 3. Immediately prepare the connection

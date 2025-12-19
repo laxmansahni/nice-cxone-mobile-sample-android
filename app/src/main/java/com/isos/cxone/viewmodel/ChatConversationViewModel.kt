@@ -21,6 +21,7 @@ import kotlinx.coroutines.Dispatchers
 import java.util.UUID
 import com.isos.cxone.models.ThreadDisplayItem
 import com.isos.cxone.models.threadOrAgentName
+import com.isos.cxone.util.ChatErrorCoordinator
 import com.nice.cxonechat.ChatMode
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
@@ -50,6 +51,7 @@ import com.isos.cxone.attachment.AttachmentResolver
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+
 /**
  * Temporary local definition of AttachmentType, assuming it exists in the SDK.
  * This is defined here to ensure the ViewModel is runnable.
@@ -68,22 +70,24 @@ data class TemporarySentMessage(
     val text: String,
     val attachments: Iterable<Attachment>,
     val createdAt: Date = Date(),
-    val metadata: MessageMetadata,
+    val status: MessageStatus = MessageStatus.Sending,
     val author: MessageAuthor,
     val direction: MessageDirection = ToAgent
 ) {
+    val metadata: MessageMetadata
+        get() = object : MessageMetadata {
+            override val seenAt: Date? = null
+            override val readAt: Date? = null
+            override val seenByCustomerAt: Date? = null
+            override val status: MessageStatus = this@TemporarySentMessage.status
+        }
+
     // Constructor using anonymous objects for MessageMetadata and MessageAuthor
     constructor(id: UUID, text: String, attachments: List<Attachment>) : this(
         localId = id,
         text = text,
         createdAt = Date(),
         attachments = attachments,
-        metadata = object : MessageMetadata {
-            override val seenAt: Date? = null
-            override val readAt: Date? = null
-            override val seenByCustomerAt: Date? = null
-            override val status: MessageStatus = MessageStatus.Sending // Initial status is Sending
-        },
         author = object : MessageAuthor() {
             override val id: String = SENDER_ID
             override val firstName: String = ""
@@ -98,8 +102,7 @@ data class TemporarySentMessage(
     }
 }
 
-class ChatConversationViewModel(private val attachmentResolver: AttachmentResolver)
-    : ViewModel() {
+class ChatConversationViewModel(private val attachmentResolver: AttachmentResolver) : ViewModel() {
 
     companion object {
         private const val TAG = "ChatConversationViewModel"
@@ -157,7 +160,8 @@ class ChatConversationViewModel(private val attachmentResolver: AttachmentResolv
 
                 when (sdkMsg) {
                     is Message.Text -> messageText = sdkMsg.text // Correct access for Text messages
-                    is Message.QuickReplies -> messageText = sdkMsg.title // Use title for structured messages
+                    is Message.QuickReplies -> messageText =
+                        sdkMsg.title // Use title for structured messages
                     is Message.ListPicker -> messageText = sdkMsg.title
                     is Message.RichLink -> {
                         // Handle RichLink content and populate the dedicated model
@@ -202,7 +206,7 @@ class ChatConversationViewModel(private val attachmentResolver: AttachmentResolv
                     text = tempMsg.text,
                     isUser = true,
                     createdAt = tempMsg.createdAt,
-                    status = "Sending",
+                    status = tempMsg.status.toString(),
                     attachments = tempMsg.attachments.toList()
                 )
                 allMessages.add(tempUiMsg)
@@ -225,6 +229,38 @@ class ChatConversationViewModel(private val attachmentResolver: AttachmentResolv
         .map { it?.chatThread?.hasMoreMessagesToLoad ?: false }
         .distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    init {
+        // Start collecting errors from the global coordinator
+        viewModelScope.launch {
+            ChatErrorCoordinator.errors.collect { errorType ->
+                if (errorType == "SendingMessageFailed") {
+                    Log.d(TAG, "Received failure event from Coordinator. Updating UI.")
+                    handleMessageFailure()
+                }
+            }
+        }
+    }
+
+    fun handleMessageFailure() {
+        viewModelScope.launch(Dispatchers.Default) {
+            val currentSentMessages = sentMessagesFlow.value
+            // Find the most recent "Sending" message to mark as failed
+            val lastEntry =
+                currentSentMessages.entries.lastOrNull { it.value.status == MessageStatus.Sending }
+
+            if (lastEntry != null) {
+                val (uuid, msg) = lastEntry
+                Log.w(TAG, "Marking message as FailedToDeliver: $uuid")
+
+                // Create a copy with the new status
+                val failedMessage = msg.copy(status = MessageStatus.FailedToDeliver)
+
+                // Update the flow: Replace the old message with the failed one
+                sentMessagesFlow.update { it.plus(uuid to failedMessage) }
+            }
+        }
+    }
 
     /**
      * Private mapping function that determines the display name based on ChatMode.
@@ -487,7 +523,10 @@ class ChatConversationViewModel(private val attachmentResolver: AttachmentResolv
         // 2. Apply duplicate check based on the attachment's URL (which holds the file URI string)
         _pendingAttachments.update { currentList ->
             if (currentList.any { it.url == attachment.url }) {
-                Log.w(TAG, "Attachment with URL ${attachment.url} (File: ${attachment.friendlyName}) already exists in pending queue. Skipping addition.")
+                Log.w(
+                    TAG,
+                    "Attachment with URL ${attachment.url} (File: ${attachment.friendlyName}) already exists in pending queue. Skipping addition."
+                )
                 // Return the current list unchanged if a duplicate is found
                 currentList
             } else {
@@ -497,9 +536,11 @@ class ChatConversationViewModel(private val attachmentResolver: AttachmentResolv
         }
         Log.d(TAG, "Attachment processed: ${attachment.friendlyName}")
     }
+
     fun onRemovePendingAttachment(attachment: Attachment) {
         _pendingAttachments.value = _pendingAttachments.value.filter { it.url != attachment.url }
     }
+
     fun reportTypingStarted() {
         viewModelScope.launch {
             threadHandler?.events()?.typingStart()
@@ -521,7 +562,11 @@ class ChatConversationViewModel(private val attachmentResolver: AttachmentResolv
      * @param type The AttachmentType hint (Image, Video, Document).
      * @return An anonymous implementation of the SDK's Attachment interface.
      */
-    private fun createAttachmentFromUri(uri: Uri, context: Context, type: AttachmentType): Attachment {
+    private fun createAttachmentFromUri(
+        uri: Uri,
+        context: Context,
+        type: AttachmentType
+    ): Attachment {
         val contentResolver = context.contentResolver
         var friendlyName: String = uri.lastPathSegment ?: "Attachment"
         var mimeType: String? = null
@@ -556,6 +601,7 @@ class ChatConversationViewModel(private val attachmentResolver: AttachmentResolv
 
         return object : Attachment {
             override val friendlyName: String = finalFriendlyName
+
             // The URL field of Attachment is used here to store the local file URI string for display/tracking
             override val url: String = uri.toString()
             override val mimeType: String? = finalMimeType
