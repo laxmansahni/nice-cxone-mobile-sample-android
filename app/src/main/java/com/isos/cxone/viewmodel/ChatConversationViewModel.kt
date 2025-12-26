@@ -110,7 +110,7 @@ class ChatConversationViewModel(private val attachmentResolver: AttachmentResolv
 
     private val chat = ChatInstanceProvider.get().chat.let(::requireNotNull)
 
-    private val handlerThreads: ChatThreadsHandler? = chat.threads().also {
+    private var handlerThreads: ChatThreadsHandler? = chat.threads().also {
         Log.d(TAG, "ChatThreadsHandler initialized.")
     }
 
@@ -611,6 +611,15 @@ class ChatConversationViewModel(private val attachmentResolver: AttachmentResolv
     override fun onCleared() {
         Log.w(TAG, "ViewModel cleared → cancelling listeners.")
         cancellableThread?.cancel()
+        cancellableThread = null
+
+        // Explicitly nullify the handler to allow GC to collect the messages
+        handlerThreads = null
+        threadHandler = null
+
+        // Clear the state flows to release the message objects
+        _thread.value = null
+        sentMessagesFlow.value = emptyMap()
         super.onCleared()
     }
 }

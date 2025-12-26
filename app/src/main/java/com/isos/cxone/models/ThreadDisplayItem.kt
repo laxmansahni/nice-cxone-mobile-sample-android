@@ -19,9 +19,10 @@ private fun Date.toRelativeTime(): String {
     }
 }
 
-data class ThreadDisplayItem( val chatThread: ChatThread,
-                              val name: String?,)
-{
+data class ThreadDisplayItem(
+    val chatThread: ChatThread,
+    val name: String?,
+) {
     // We assume ChatThread has a UUID ID field.
     val id: String = chatThread.id.toString()
 
@@ -43,7 +44,16 @@ data class ThreadDisplayItem( val chatThread: ChatThread,
         lastMessageObject
             ?.run {
                 when (this) {
-                    is Text -> text
+                    is Text -> {
+                        val attachmentCount = attachments.toList().size
+                        if (text.isBlank() && attachmentCount > 0) {
+                            // Fallback logic for attachment-only messages
+                            "$attachmentCount attachment(s)"
+                        } else {
+                            text
+                        }
+                    }
+
                     is RichLink -> fallbackText
                     is QuickReplies -> fallbackText
                     is ListPicker -> fallbackText
