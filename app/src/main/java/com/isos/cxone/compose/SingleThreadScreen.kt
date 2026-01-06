@@ -48,6 +48,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.isos.cxone.viewmodel.ChatConversationViewModel
 import com.isos.cxone.models.MessageDisplayItem
+import com.isos.cxone.models.MessageType
 import com.isos.cxone.models.Person
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -83,6 +84,8 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.runtime.saveable.rememberSaveable
 import com.nice.cxonechat.message.Attachment
+import com.nice.cxonechat.message.Action
+import com.nice.cxonechat.message.Action.ReplyButton
 import com.isos.cxone.viewmodel.AttachmentType
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.isos.cxone.attachment.AttachmentResolver
@@ -100,6 +103,14 @@ import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import com.isos.cxone.util.openWithAndroid
 import android.widget.Toast
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.SuggestionChip
+import androidx.compose.material3.SuggestionChipDefaults
+import androidx.compose.material3.TextButton
 
 private val JumboEmojiStyle = TextStyle(
     fontSize = 34.sp,
@@ -233,7 +244,8 @@ fun SingleThreadScreen(
                         canLoadMore = canLoadMore,
                         listState = listState,
                         loadMore = viewModel::loadMore,
-                        isViewModelLoading = isLoading
+                        isViewModelLoading = isLoading,
+                        onActionClick = viewModel::sendReply
                     )
                     // ATTACHMENT PREVIEW BAR
                     AttachmentPreviewBar(
@@ -289,6 +301,7 @@ private fun ColumnScope.ChatHistory(
     listState: LazyListState,
     loadMore: () -> Unit,
     isViewModelLoading: Boolean,
+    onActionClick: (ReplyButton) -> Unit,
 ) {
     // Implement scroll-to-top detection for pagination here.
     // This correctly triggers loadMore() when the user scrolls to the top of the history.
@@ -319,7 +332,7 @@ private fun ColumnScope.ChatHistory(
             .weight(1f)
             .fillMaxWidth()
             .padding(horizontal = 8.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)
+        contentPadding = PaddingValues(vertical = 8.dp)
     ) {
         // Typing indicator is always at index 0 (bottom) when visible
         if (isAgentTyping) {
@@ -341,19 +354,23 @@ private fun ColumnScope.ChatHistory(
             items = messages,
             key = { it.id.toString() }
         ) { message ->
-            MessageItem(message)
+            MessageItem(message, onActionClick = onActionClick)
         }
     }
 }
 
 @Composable
-private fun MessageItem(message: MessageDisplayItem) {
+private fun MessageItem(
+    message: MessageDisplayItem,
+    onActionClick: (ReplyButton) -> Unit
+) {
     val isUser = message.isUser
     val author = message.author
 
     val attachments = message.attachments
     val hasAttachments = attachments.isNotEmpty()
-    // ASSUMPTION: Rich link check based on nullable properties in MessageDisplayItem
+    val isQuickReply = message.type == MessageType.QUICK_REPLY
+    val isListPicker = message.type == MessageType.LIST_PICKER
     val isRichLink = !message.richLink?.url.isNullOrBlank()
 
     // 1. Determine if it's an emoji message using the new SDK-alike logic
@@ -417,64 +434,77 @@ private fun MessageItem(message: MessageDisplayItem) {
                 Spacer(Modifier.width(8.dp))
             }
 
-            // Message Card
-            Card(
-                // Use RoundedCornerShape(0.dp) for emoji messages to ensure no visible background corner remains
-                shape = if (isEmoji) RoundedCornerShape(0.dp) else RoundedCornerShape(
-                    topStart = 8.dp,
-                    topEnd = 8.dp,
-                    bottomStart = if (isUser) 8.dp else 2.dp,
-                    bottomEnd = if (isUser) 2.dp else 8.dp
-                ),
-                colors = CardDefaults.cardColors(containerColor = messageBackgroundColor),
-                elevation = CardDefaults.cardElevation(defaultElevation = cardElevation)
-            ) {
-                Column(modifier = Modifier.padding(contentPadding)) {
-                    if (isRichLink) {
-                        RichLinkContent(
-                            title = message.richLink.title, // Use message.text if title is missing
-                            url = message.richLink.url,
-                            imageUrl = message.richLink.imageUrl,
-                        )
-                    } else {
-                        // Renders the original text/emoji content
-                        Text(
-                            text = message.text,
-                            color = textColor,
-                            style = textStyle
-                        )
-                        if (hasAttachments) {
-                            // Add a spacer if there was text above the attachments
-                            if (message.text.isNotBlank()) Spacer(Modifier.height(8.dp))
-                            AttachmentsContent(
-                                attachments = attachments,
-                                isUser = isUser,
-                                // Pass the text color for consistent attachment item coloring
-                                textColor = textColor
+            // Wrap Card and QuickReplies in a Column so chips are below the bubble
+            Column {
+                Card(
+                    // Use RoundedCornerShape(0.dp) for emoji messages to ensure no visible background corner remains
+                    shape = if (isEmoji) RoundedCornerShape(0.dp) else RoundedCornerShape(
+                        topStart = 8.dp,
+                        topEnd = 8.dp,
+                        bottomStart = if (isUser) 8.dp else 2.dp,
+                        bottomEnd = if (isUser) 2.dp else 8.dp
+                    ),
+                    colors = CardDefaults.cardColors(containerColor = messageBackgroundColor),
+                    elevation = CardDefaults.cardElevation(defaultElevation = cardElevation)
+                ) {
+                    Column(modifier = Modifier.padding(contentPadding)) {
+                        when {
+                            isRichLink -> {
+                                RichLinkContent(
+                                    title = message.richLink.title, // Use message.text if title is missing
+                                    url = message.richLink.url,
+                                    imageUrl = message.richLink.imageUrl,
+                                )
+                            }
+
+                            isListPicker -> {
+                                ListPickerContent(message = message, onActionClick = onActionClick)
+                            }
+
+                            else -> {
+                                Text(
+                                    text = message.text,
+                                    color = textColor,
+                                    style = textStyle
+                                )
+                                if (hasAttachments) {
+                                    // Add a spacer if there was text above the attachments
+                                    if (message.text.isNotBlank()) Spacer(Modifier.height(8.dp))
+                                    AttachmentsContent(
+                                        attachments = attachments,
+                                        isUser = isUser,
+                                        // Pass the text color for consistent attachment item coloring
+                                        textColor = textColor
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .align(Alignment.End)
+                                .padding(top = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Display the time
+                            Text(
+                                text = timeText,
+                                color = textColor.copy(alpha = 0.6f),
+                                style = MaterialTheme.typography.labelSmall
+                            )
+
+                            Spacer(Modifier.width(4.dp)) // Small spacer between time and status
+                            Text(
+                                text = message.status,
+                                color = textColor.copy(alpha = 0.6f),
+                                style = MaterialTheme.typography.labelSmall
                             )
                         }
                     }
-
-                    Row(
-                        modifier = Modifier
-                            .align(Alignment.End)
-                            .padding(top = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Display the time
-                        Text(
-                            text = timeText,
-                            color = textColor.copy(alpha = 0.6f),
-                            style = MaterialTheme.typography.labelSmall
-                        )
-
-                        Spacer(Modifier.width(4.dp)) // Small spacer between time and status
-                        Text(
-                            text = message.status,
-                            color = textColor.copy(alpha = 0.6f),
-                            style = MaterialTheme.typography.labelSmall
-                        )
-                    }
+                }
+                // Quick Replies appear OUTSIDE the bubble as per standard UI patterns
+                if (isQuickReply && message.actions.isNotEmpty()) {
+                    QuickReplyOptions(actions = message.actions, onActionClick = onActionClick)
                 }
             }
         }
@@ -546,7 +576,10 @@ private fun AttachmentDisplayUiItem(
                     Toast.LENGTH_SHORT
                 ).show()
                 // since the system couldn't find an app to resolve the intent.
-                Log.e("SingleThreadScreen", "No activity found to open attachment: ${attachment.mimeType}")
+                Log.e(
+                    "SingleThreadScreen",
+                    "No activity found to open attachment: ${attachment.mimeType}"
+                )
             }
         }
 
@@ -862,6 +895,33 @@ private fun RichLinkContent(
     }
 }
 
+/** the composable to show pending attachments. */
+@Composable
+private fun AttachmentPreviewBar(
+    attachments: List<Attachment>,
+    onAttachmentClick: (Attachment) -> Unit,
+    onAttachmentRemoved: (Attachment) -> Unit,
+) {
+    if (attachments.isEmpty()) return
+
+    Column {
+        Divider(Modifier.padding(horizontal = 8.dp))
+        LazyRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+        ) {
+            items(attachments, key = { it.url }) { attachment ->
+                AttachmentPreviewItem(
+                    attachment = attachment,
+                    onAttachmentClick = onAttachmentClick,
+                    onAttachmentRemoved = onAttachmentRemoved,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun AttachmentPreviewItem(
     attachment: Attachment,
@@ -908,33 +968,6 @@ private fun AttachmentPreviewItem(
                 tint = MaterialTheme.colorScheme.onErrorContainer,
                 modifier = Modifier.size(12.dp)
             )
-        }
-    }
-}
-
-/** the composable to show pending attachments. */
-@Composable
-private fun AttachmentPreviewBar(
-    attachments: List<Attachment>,
-    onAttachmentClick: (Attachment) -> Unit,
-    onAttachmentRemoved: (Attachment) -> Unit,
-) {
-    if (attachments.isEmpty()) return
-
-    Column {
-        Divider(Modifier.padding(horizontal = 8.dp))
-        LazyRow(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 8.dp),
-        ) {
-            items(attachments, key = { it.url }) { attachment ->
-                AttachmentPreviewItem(
-                    attachment = attachment,
-                    onAttachmentClick = onAttachmentClick,
-                    onAttachmentRemoved = onAttachmentRemoved,
-                )
-            }
         }
     }
 }
@@ -1125,6 +1158,70 @@ private fun AttachmentTypeItem(
         leadingContent = { Icon(icon, contentDescription = label) },
         modifier = Modifier.clickable(onClick = onClick)
     )
+}
+
+@Composable
+private fun QuickReplyOptions(
+    actions: List<Action>,
+    onActionClick: (ReplyButton) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .padding(top = 8.dp)
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        actions.filterIsInstance<ReplyButton>().forEach { action ->
+            SuggestionChip(
+                onClick = { onActionClick(action) },
+                label = { Text(action.text) },
+                colors = SuggestionChipDefaults.suggestionChipColors(
+                    labelColor = MaterialTheme.colorScheme.primary
+                )
+            )
+        }
+    }
+}
+
+@Composable
+private fun ListPickerContent(
+    message: MessageDisplayItem,
+    onActionClick: (ReplyButton) -> Unit
+) {
+    Column(modifier = Modifier.padding(8.dp)) {
+        Text(
+            text = message.title ?: "Options",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            text = message.text,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(vertical = 4.dp)
+        )
+        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+        message.actions.filterIsInstance<ReplyButton>().forEach { action ->
+            TextButton(
+                onClick = { onActionClick(action) },
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.List,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(text = action.text, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+    }
 }
 
 /** the state of the user input area (similar to InputState in UserInput.kt). */

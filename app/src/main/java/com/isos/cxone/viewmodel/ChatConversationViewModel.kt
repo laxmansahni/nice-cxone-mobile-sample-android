@@ -41,12 +41,15 @@ import com.nice.cxonechat.message.MessageStatus
 import com.isos.cxone.models.MessageDisplayItem
 import com.isos.cxone.models.RichLinkDisplayItem
 import com.isos.cxone.models.asPerson
+import com.isos.cxone.models.MessageType
 import com.nice.cxonechat.message.OutboundMessage
 import com.nice.cxonechat.ChatThreadMessageHandler.OnMessageTransferListener
 import kotlinx.coroutines.flow.update
 import java.lang.ref.WeakReference
 import com.nice.cxonechat.message.Attachment
 import com.nice.cxonechat.message.ContentDescriptor
+import com.nice.cxonechat.message.Action.ReplyButton
+import com.nice.cxonechat.message.Action
 import com.isos.cxone.attachment.AttachmentResolver
 import android.content.Context
 import android.net.Uri
@@ -152,25 +155,37 @@ class ChatConversationViewModel(private val attachmentResolver: AttachmentResolv
     private val sdkMessagesFlow: Flow<List<MessageDisplayItem>> = _thread
         .map { it?.chatThread?.messages }
         .map { sdkMessages ->
-            // Convert SDK messages to SimpleMessage list. We must use a 'when' expression
-            // to safely access content based on the message type (fixing the 'text' error).
             sdkMessages?.map { sdkMsg ->
-                val messageText: String
+                var messageText: String = ""
+                var title: String? = null
+                var actions: List<Action> = emptyList()
                 var richLinkItem: RichLinkDisplayItem? = null
+                var type = MessageType.TEXT
 
                 when (sdkMsg) {
-                    is Message.Text -> messageText = sdkMsg.text // Correct access for Text messages
-                    is Message.QuickReplies -> messageText =
-                        sdkMsg.title // Use title for structured messages
-                    is Message.ListPicker -> messageText = sdkMsg.title
+                    is Message.Text -> { messageText = sdkMsg.text
+                    }
+                    is Message.QuickReplies -> {
+                        title = sdkMsg.title
+                        messageText = sdkMsg.title
+                        actions = sdkMsg.actions.toList()
+                        type = MessageType.QUICK_REPLY
+                    }
+                    is Message.ListPicker -> {
+                        title = sdkMsg.title
+                        messageText = sdkMsg.text
+                        actions = sdkMsg.actions.toList()
+                        type = MessageType.LIST_PICKER
+                    }
                     is Message.RichLink -> {
                         // Handle RichLink content and populate the dedicated model
-                        messageText = sdkMsg.title // Use the main title as the primary message text
+                        messageText = sdkMsg.title
                         richLinkItem = RichLinkDisplayItem(
                             title = sdkMsg.title,
                             url = sdkMsg.url,
                             imageUrl = sdkMsg.media.url
                         )
+                        type = MessageType.RICH_LINK
                     }
 
                     is Message.Unsupported -> messageText = "Unsupported message content"
@@ -376,7 +391,7 @@ class ChatConversationViewModel(private val attachmentResolver: AttachmentResolv
         cancellableThread = handler.get { updatedThread ->
             // CRITICAL: Launch the state updates into the ViewModel's scope
             viewModelScope.launch {
-                Log.d(TAG, "→ threadFlow() callback → threadId=${updatedThread.id}")
+                Log.d(TAG, "→ threadFlow() callback → threadId=${updatedThread.id} scrollToken=${updatedThread.scrollToken} messagesCount=${updatedThread.messages.count()}")
 
                 // Update the thread data
                 _thread.value = toDisplayItem(updatedThread)
@@ -416,6 +431,21 @@ class ChatConversationViewModel(private val attachmentResolver: AttachmentResolv
             Log.d(TAG, "Called loadMore()")
         }
     }
+
+    /**
+   * Asynchronously sets the thread name using the underlying ChatThreadHandler.
+   *
+   * Note: In a production UI, this would typically be followed by an optimistic update
+   * to the UI state to instantly reflect the change while waiting for SDK confirmation.
+   * Since this is the exposure layer, we only delegate the call.
+   */
+  fun setThreadName(name: String) {
+    viewModelScope.launch {
+      Log.d(TAG, "Attempting to set thread name to: $name")
+      threadHandler?.setName(name)
+      Log.d(TAG, "Thread name is set ${threadHandler?.get()!!.threadName}")
+    }
+  }
 
     /**
      * Sends a text message by constructing an OutboundMessage and using the OnMessageSentListener
@@ -605,6 +635,35 @@ class ChatConversationViewModel(private val attachmentResolver: AttachmentResolv
             // The URL field of Attachment is used here to store the local file URI string for display/tracking
             override val url: String = uri.toString()
             override val mimeType: String? = finalMimeType
+        }
+    }
+
+    /**
+     * Sends a reply (postback) for a QuickReply or ListPicker selection.
+     */
+    fun sendReply(action: ReplyButton) {
+        viewModelScope.launch {
+            try {
+                // 1. Convert the ReplyButton Action into an OutboundMessage
+                // This uses the operator fun invoke(action: Action.ReplyButton) in OutboundMessage
+                val outboundReply = OutboundMessage(action)
+
+                // Add immediate UI feedback for the button click
+                val appMessage: (UUID) -> TemporarySentMessage = { id ->
+                    TemporarySentMessage(id, action.text, attachments = emptyList())
+                }
+                val listener = OnMessageSentListener(
+                    message = appMessage,
+                    flow = sentMessagesFlow,
+                    loaderFlow = _isLoading
+                )
+                // 2. Send the converted message via the handler
+                threadHandler?.messages()?.send(outboundReply, listener)
+
+                Log.d(TAG, "Sent reply for action: ${action.text} with postback: ${action.postback}")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to send reply", e)
+            }
         }
     }
 
