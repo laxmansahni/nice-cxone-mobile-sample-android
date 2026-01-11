@@ -23,6 +23,8 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 class ChatAllConversationsViewModel : ViewModel() {
 
     companion object {
@@ -33,8 +35,8 @@ class ChatAllConversationsViewModel : ViewModel() {
     val threads: StateFlow<List<ThreadDisplayItem>> = _threads.asStateFlow()
 
     // --- Start: New refresh mechanism for immediate name update ---
-    private val _refreshThreadName: MutableStateFlow<Boolean> = MutableStateFlow(false)
-    val refreshThreadName: StateFlow<Boolean> = _refreshThreadName.asStateFlow()
+    private val _refreshEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val refreshEvent = _refreshEvent.asSharedFlow()
     // --- End: New refresh mechanism --
     private val chat = ChatInstanceProvider.get().chat.let(::requireNotNull)
     private val handlerThreads: ChatThreadsHandler = chat.threads()
@@ -77,8 +79,8 @@ class ChatAllConversationsViewModel : ViewModel() {
                 // Get the specific handler for this chat thread and set the new name
                 val threadHandler = handlerThreads.thread(thread.chatThread)
                 threadHandler.setName(newName)
-                // Toggle the boolean state to signal the Compose UI to call refreshThreads()
-                _refreshThreadName.value = !_refreshThreadName.value
+                // Emit a signal instead of toggling a boolean
+                _refreshEvent.emit(Unit)
             } catch (e: Exception) {
                 // Log or handle error if name update fails
                 Log.e(TAG, "Error updating thread name: ${e.message}")
@@ -90,10 +92,15 @@ class ChatAllConversationsViewModel : ViewModel() {
     /**
      * Private mapping function that determines the display name based on ChatMode.
      */
-    private fun toDisplayItem(chatThread: ChatThread) = ThreadDisplayItem(
-        chatThread = chatThread,
-        name = chatThread.threadOrAgentName(chatMode === ChatMode.MultiThread)
-    )
+    private fun toDisplayItem(chatThread: ChatThread): ThreadDisplayItem {
+        // Log the message count for this specific thread
+        Log.d(TAG, "toDisplayItem: Thread ID ${chatThread.id} has ${chatThread.messages.size} messages.")
+
+        return ThreadDisplayItem(
+            chatThread = chatThread,
+            name = chatThread.threadOrAgentName(chatMode === ChatMode.MultiThread)
+        )
+    }
 
     /**
      * Correctly wraps the listener-based ChatThreadsHandler.threads() method into a Kotlin Flow.

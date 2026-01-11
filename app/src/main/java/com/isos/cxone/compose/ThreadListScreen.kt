@@ -65,7 +65,6 @@ fun ThreadListScreen(
     // 2. Map the raw SDK threads to the display model list (ThreadDisplayItem)
     val allThreads by viewModel.threads.collectAsState()
     val dialogState by viewModel.showDialog.collectAsState()
-    val refreshThreadName by viewModel.refreshThreadName.collectAsState()
 
     val activeThreads = remember(allThreads) { allThreads.filter { it.isActive } }
     val archivedThreads = remember(allThreads) { allThreads.filter { !it.isActive } }
@@ -80,9 +79,11 @@ fun ThreadListScreen(
     }
 
     // LaunchedEffect to observe the refresh signal and trigger a data refresh
-    LaunchedEffect(refreshThreadName) {
-        Log.d("ThreadListScreen", "Refresh thread name signal received. Forcing threads refresh.")
-        viewModel.refreshThreads()
+    LaunchedEffect(Unit) {
+        viewModel.refreshEvent.collect {
+            Log.d("ThreadListScreen", "Refresh event received. Forcing threads refresh.")
+            viewModel.refreshThreads()
+        }
     }
 
     Scaffold(
