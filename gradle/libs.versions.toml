@@ -14,7 +14,7 @@ emoji2Version = "1.6.0"
 ktorVersion = "3.3.0"
 
 # --- ADDED: NICE CXONE SDK Version ---
-nice-sdk-chat = "3.1.0"
+nice-sdk-chat = "3.1.1"
 kotlin-coroutines = "1.10.2"
 
 [libraries]

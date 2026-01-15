@@ -25,11 +25,13 @@ import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+
 class ChatAllConversationsViewModel : ViewModel() {
 
     companion object {
         private const val TAG = "ChatAllConversationsViewModel"
     }
+
     // 1. Threads are now exposed as a StateFlow for Compose to observe
     private val _threads = MutableStateFlow<List<ThreadDisplayItem>>(emptyList())
     val threads: StateFlow<List<ThreadDisplayItem>> = _threads.asStateFlow()
@@ -37,6 +39,7 @@ class ChatAllConversationsViewModel : ViewModel() {
     // --- Start: New refresh mechanism for immediate name update ---
     private val _refreshEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val refreshEvent = _refreshEvent.asSharedFlow()
+
     // --- End: New refresh mechanism --
     private val chat = ChatInstanceProvider.get().chat.let(::requireNotNull)
     private val handlerThreads: ChatThreadsHandler = chat.threads()
@@ -94,7 +97,10 @@ class ChatAllConversationsViewModel : ViewModel() {
      */
     private fun toDisplayItem(chatThread: ChatThread): ThreadDisplayItem {
         // Log the message count for this specific thread
-        Log.d(TAG, "toDisplayItem: Thread ID ${chatThread.id} has ${chatThread.messages.size} messages.")
+        Log.d(
+            TAG,
+            "toDisplayItem: Thread ID ${chatThread.id} has ${chatThread.messages.size} messages."
+        )
 
         return ThreadDisplayItem(
             chatThread = chatThread,
@@ -128,13 +134,48 @@ class ChatAllConversationsViewModel : ViewModel() {
     init {
         // Start collecting the Flow immediately when the ViewModel is created
         viewModelScope.launch {
-            threadListFlow.collect { latestThreads ->
-                _threads.value = latestThreads
-                    .map { chatThread -> toDisplayItem(chatThread) }
+            threadListFlow.collect { latestServerThreads ->
+                // 1. Get current UI state
+                val currentUIThreads = _threads.value
+
+                // 2. Map all server threads to UI models
+                val serverItems = latestServerThreads.map { toDisplayItem(it) }
+                val serverIds = serverItems.map { it.id }.toSet()
+
+                // 3. Merge Logic:
+                // - Take all server items that pass the hydration check.
+                // - ALSO keep items that are currently in the UI but server-reported as unhydrated.
+                // This "stickiness" prevents the screen from closing during sync.
+                val hydratedServerItems = serverItems.filter { isThreadHydrated(it.chatThread) }
+
+                val stickyThreads = currentUIThreads.filter { local ->
+                    val isBeingReportedByServer = local.id in serverIds
+                    val isServerVersionHydrated = hydratedServerItems.any { it.id == local.id }
+
+                    // Keep the local version if the server knows about it but hasn't hydrated it yet
+                    isBeingReportedByServer && !isServerVersionHydrated
+                }
+
+                val combined = (hydratedServerItems + stickyThreads)
+                    .distinctBy { it.id }
+                    .sortedByDescending { if (it.lastMessageTimestamp == 0L) Long.MAX_VALUE else it.lastMessageTimestamp }
+
+                _threads.value = combined
+                Log.d(TAG, "Sync complete. Total threads: ${combined.size}")
             }
         }
         // Initial call to populate the list
         refreshThreads()
+    }
+
+    private fun isThreadHydrated(chatThread: ChatThread): Boolean {
+        val hasName = !chatThread.threadName.isNullOrBlank()
+        val hasMessages = chatThread.messages.isNotEmpty()
+        val hasFields = chatThread.fields.isNotEmpty()
+
+        // Return true if it has ANY data.
+        // This prevents threads from disappearing while messages are still loading.
+        return hasName || hasMessages || hasFields
     }
 
     /**
@@ -150,12 +191,15 @@ class ChatAllConversationsViewModel : ViewModel() {
         customFields: Map<String, String> = emptyMap()
     ): ChatThreadHandler = withContext(Dispatchers.Default) {
         // Explicitly check the multi-thread status as requested.
-        if (chatMode === ChatMode.MultiThread ) {
+        if (chatMode === ChatMode.MultiThread) {
             val survey = handlerThreads.preChatSurvey
             if (survey != null) {
                 // In a real application, you would ensure all required 'preChatSurveyResponse'
                 // fields are present before calling 'create()'.
-                Log.i(TAG,"Multi-thread mode is active. Pre-Chat Survey '${survey.name}' is defined. Attempting creation.")
+                Log.i(
+                    TAG,
+                    "Multi-thread mode is active. Pre-Chat Survey '${survey.name}' is defined. Attempting creation."
+                )
             }
         }
 

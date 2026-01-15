@@ -67,6 +67,10 @@ data class ThreadDisplayItem(
         lastMessageObject?.createdAt?.toRelativeTime() ?: ""
     }
 
+    val lastMessageTimestamp: Long by lazy {
+        lastMessageObject?.createdAt?.time ?: 0L
+    }
+
     /** True if more messages can be added (i.e., not archived/closed). */
     val isActive: Boolean = chatThread.canAddMoreMessages
 
