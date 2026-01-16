@@ -71,9 +71,19 @@ fun ThreadListScreen(
 
     val threadsToShow = if (showArchived) archivedThreads else activeThreads
 
+    val handleThreadSelection: (ThreadDisplayItem) -> Unit = { threadItem ->
+        // 1. Tell ViewModel to set this as the active thread in the Repository
+        viewModel.onThreadSelected(threadItem)
+
+        // 2. Trigger navigation with the ID (for routing purposes)
+        onThreadSelected(threadItem.id)
+    }
     // Function to simulate archiving a thread (real implementation would call ViewModel logic)
     val onArchiveThread: (ThreadDisplayItem) -> Unit = { threadToArchive ->
-        Log.d("ThreadListScreen", "Simulating archive call for thread: ${threadToArchive.displayName}")
+        Log.d(
+            "ThreadListScreen",
+            "Simulating archive call for thread: ${threadToArchive.displayName}"
+        )
         // In a real app, calling viewModel.archiveThread() would update the rawChatThreads StateFlow,
         // which automatically triggers a recomposition here.
     }
@@ -125,14 +135,22 @@ fun ThreadListScreen(
                             SwipeableThreadWrapper(
                                 thread = thread,
                                 onArchiveThread = onArchiveThread,
-                                onThreadSelected = onThreadSelected,
+                                onThreadSelected = { handleThreadSelection(thread) },
                                 onEditName = onEditName
                             )
                         } else {
                             // Non-swipeable view for archived threads
-                            ThreadListItem(thread = thread, onThreadSelected = onThreadSelected, onEditName = onEditName )
+                            ThreadListItem(
+                                thread = thread,
+                                onThreadSelected = { handleThreadSelection(thread) },
+                                onEditName = onEditName
+                            )
                         }
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(
+                                alpha = 0.5f
+                            )
+                        )
                     }
                 }
             }
@@ -149,6 +167,7 @@ fun ThreadListScreen(
                 }
             )
         }
+
         ChatAllConversationsViewModel.Dialog.None -> {
             // Do nothing
         }
@@ -187,7 +206,7 @@ private fun ThreadStateToggle(showArchived: Boolean, onValueChanged: (Boolean) -
 private fun SwipeableThreadWrapper(
     thread: ThreadDisplayItem,
     onArchiveThread: (ThreadDisplayItem) -> Unit,
-    onThreadSelected: (String) -> Unit,
+    onThreadSelected: () -> Unit,
     onEditName: () -> Unit
 ) {
     val dismissState = rememberSwipeToDismissBoxState(
@@ -207,9 +226,11 @@ private fun SwipeableThreadWrapper(
             SwipeBackground(dismissState.targetValue)
         },
         content = {
-            ThreadListItem(thread = thread,
+            ThreadListItem(
+                thread = thread,
                 onThreadSelected = onThreadSelected,
-                onEditName = onEditName )
+                onEditName = onEditName
+            )
         }
     )
 }
@@ -239,11 +260,15 @@ private fun SwipeBackground(targetValue: SwipeToDismissBoxValue) {
 
 /** Displays the content of a single thread item. */
 @Composable
-private fun ThreadListItem(thread: ThreadDisplayItem, onThreadSelected: (String) -> Unit, onEditName: () -> Unit) {
+private fun ThreadListItem(
+    thread: ThreadDisplayItem,
+    onThreadSelected: () -> Unit,
+    onEditName: () -> Unit
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onThreadSelected(thread.id) },
+            .clickable { onThreadSelected() },
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.background),
         shape = MaterialTheme.shapes.small
     ) {
@@ -310,7 +335,9 @@ private fun ThreadListItem(thread: ThreadDisplayItem, onThreadSelected: (String)
 @Composable
 private fun EmptyThreadsView(isArchived: Boolean) {
     Box(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {

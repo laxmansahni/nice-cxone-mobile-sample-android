@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.isos.cxone.models.ThreadDisplayItem
 import com.isos.cxone.models.threadOrAgentName
+import com.isos.cxone.repository.SelectedThreadRepository
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.channels.awaitClose
@@ -179,6 +180,15 @@ class ChatAllConversationsViewModel : ViewModel() {
     }
 
     /**
+     * Called by the UI when a user clicks on a thread in the list.
+     * This prepares the SelectedThreadRepository for the Detail screen.
+     */
+    fun onThreadSelected(item: ThreadDisplayItem) {
+        val handler = handlerThreads.thread(item.chatThread)
+        SelectedThreadRepository.set(item.chatThread, handler)
+    }
+
+    /**
      * Creates a new chat thread asynchronously, handling logic based on whether the chat is configured
      * for single or multiple threads and providing required pre-chat data.
      *
@@ -206,7 +216,14 @@ class ChatAllConversationsViewModel : ViewModel() {
         // The SDK's ChatThreadsHandler.create method handles the comprehensive validation
         // (including single-thread limits, required pre-chat fields, and fetch completion).
         // It will throw exceptions if validation fails (e.g., MissingPreChatCustomFieldsException).
-        handlerThreads.create(customFields, preChatSurveyResponse)
+        // 1. Create the new handler via SDK
+        val newHandler = handlerThreads.create(customFields, preChatSurveyResponse)
+
+        // 2. Immediately cache it in the repository so the detail screen
+        // doesn't have to "re-find" it.
+        SelectedThreadRepository.set(newHandler.get(), newHandler)
+
+        newHandler
     }
 
     fun refreshThreads() {

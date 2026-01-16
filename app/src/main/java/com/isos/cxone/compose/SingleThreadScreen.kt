@@ -91,6 +91,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import com.isos.cxone.attachment.AttachmentResolver
 import com.isos.cxone.attachment.AttachmentResolverImpl
 import com.isos.cxone.util.ChatConversationViewModelFactory
+import com.isos.cxone.repository.SelectedThreadRepository
 import androidx.compose.material.icons.filled.Download
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -173,10 +174,6 @@ fun SingleThreadScreen(
     navigateUp: () -> Unit,
 ) {
     val viewModel: ChatConversationViewModel = viewModel(factory = viewModelFactory)
-    // Load the thread when the composable first enters the composition
-    LaunchedEffect(threadId) {
-        viewModel.loadThread(threadId)
-    }
 
     // Observe the state flows
     val thread by viewModel.thread.collectAsState()
@@ -200,6 +197,12 @@ fun SingleThreadScreen(
 
     val context = LocalContext.current
 
+    // Clear the repository when the user leaves this screen
+    DisposableEffect(Unit) {
+        onDispose {
+            SelectedThreadRepository.clear()
+        }
+    }
     // Auto-scroll to the latest message whenever a new message or typing indicator appears
     LaunchedEffect(messages.size, isAgentTyping) {
         if (messages.isNotEmpty() || isAgentTyping) {
